@@ -15,7 +15,7 @@ pub fn db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("powerpaste.sqlite3"))
 }
 
-pub fn sync_file_path(_app: &tauri::AppHandle, folder: &str) -> Result<PathBuf, String> {
+pub fn sync_file_path(app: &tauri::AppHandle, folder: &str) -> Result<PathBuf, String> {
     let folder = PathBuf::from(folder);
     if folder.as_os_str().is_empty() {
         return Err("sync folder is empty".to_string());

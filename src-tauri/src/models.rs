@@ -23,6 +23,8 @@ pub struct Settings {
     pub sync_provider: Option<SyncProvider>,
     pub sync_folder: Option<String>,
     pub sync_salt_b64: Option<String>,
+    #[serde(default)]
+    pub hotkey: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

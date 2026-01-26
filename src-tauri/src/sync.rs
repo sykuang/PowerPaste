@@ -115,6 +115,7 @@ pub fn export_now(app: &tauri::AppHandle) -> Result<(), String> {
         _ => return Err("sync is enabled but sync folder is not set".to_string()),
     };
 
+    // Ensure we have a salt (stable per sync setup).
     settings = settings_store::ensure_sync_salt_b64(app, settings)?;
     let salt = salt_from_settings(&settings)?;
 
@@ -136,6 +137,7 @@ pub fn export_now(app: &tauri::AppHandle) -> Result<(), String> {
     let enc = encrypt(&passphrase, &salt, &plain_bytes)?;
     let file_path = sync_file_path(app, &folder)?;
 
+    // Atomic-ish write.
     let tmp_path = file_path.with_extension("tmp");
     let raw = serde_json::to_vec_pretty(&enc)
         .map_err(|e| format!("failed to serialize encrypted file: {e}"))?;

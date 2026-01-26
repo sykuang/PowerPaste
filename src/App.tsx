@@ -5,6 +5,7 @@ import {
   deleteItem,
   getSettings,
   listItems,
+  setHotkey,
   setItemPinned,
   setSyncSettings,
   syncNow,
@@ -23,6 +24,15 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<string>("");
 
   const filteredQuery = useMemo(() => query.trim(), [query]);
+
+  const trayItems = useMemo(() => {
+    const copy = [...items];
+    copy.sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return b.created_at_ms - a.created_at_ms;
+    });
+    return copy.slice(0, 12);
+  }, [items]);
 
   async function reload() {
     const [s, it] = await Promise.all([
@@ -118,7 +128,9 @@ function App() {
           <div>
             {items.length} items{filteredQuery ? ` (filtered)` : ""}
           </div>
-          <div className="muted">Click an item to copy it back.</div>
+          <div className="muted">
+            Click an item to copy it back.
+          </div>
         </div>
 
         <div className="list">
@@ -144,13 +156,21 @@ function App() {
         </div>
       </main>
 
+      <BottomTray items={trayItems} onCopy={onCopy} />
+
       {showSettings && settings ? (
         <SettingsModal
           settings={settings}
           onClose={() => setShowSettings(false)}
           onSave={async (next) => {
-            const updated = await setSyncSettings(next);
-            setSettings(updated);
+            const updatedHotkey = await setHotkey(next.hotkey);
+            const updated = await setSyncSettings({
+              enabled: next.enabled,
+              provider: next.provider,
+              folder: next.folder,
+              passphrase: next.passphrase,
+            });
+            setSettings({ ...updated, hotkey: updatedHotkey.hotkey });
             setShowSettings(false);
           }}
           onPickFolder={pickFolder}
@@ -160,10 +180,78 @@ function App() {
   );
 }
 
+function BottomTray(props: { items: ClipboardItem[]; onCopy: (item: ClipboardItem) => void }) {
+  return (
+    <div className="bottomTray" role="region" aria-label="Quick copy tray">
+      <div className="trayHeader">
+        <div className="trayTabs" role="tablist" aria-label="Tray categories">
+          <button className="trayTab isActive" role="tab" aria-selected="true" type="button">
+            Clipboard
+          </button>
+          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
+            Useful Links
+          </button>
+          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
+            Code Snippets
+          </button>
+          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
+            Assets
+          </button>
+        </div>
+      </div>
+
+      <div className="trayCards" aria-label="Clipboard items">
+        {props.items.map((item) => {
+          const title = (item.text.split(/\r?\n/)[0] ?? "").trim();
+          return (
+            <div
+              key={item.id}
+              className="trayCard"
+              role="button"
+              tabIndex={0}
+              onClick={() => props.onCopy(item)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void props.onCopy(item);
+                }
+              }}
+              title="Click to copy"
+            >
+              <div className="trayCardTop">
+                <div className="trayCardTitle">{title || "(empty)"}</div>
+                <button
+                  className="trayCopyBtn"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void props.onCopy(item);
+                  }}
+                  title="Copy"
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="trayCardBody">
+                <div className="trayCardText">{item.text}</div>
+                <div className="trayCardMeta">
+                  {item.pinned ? "Pinned • " : ""}
+                  {item.text.length} chars
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SettingsModal(props: {
   settings: Settings;
   onClose: () => void;
   onSave: (args: {
+    hotkey: string;
     enabled: boolean;
     provider: SyncProvider | null;
     folder: string | null;
@@ -171,6 +259,7 @@ function SettingsModal(props: {
   }) => Promise<void>;
   onPickFolder: () => Promise<string | null>;
 }) {
+  const [hotkey, setHotkeyValue] = useState(props.settings.hotkey);
   const [enabled, setEnabled] = useState(props.settings.sync_enabled);
   const [provider, setProvider] = useState<SyncProvider | null>(props.settings.sync_provider);
   const [folder, setFolder] = useState<string | null>(props.settings.sync_folder);
@@ -186,6 +275,19 @@ function SettingsModal(props: {
           <button className="btn" onClick={props.onClose}>
             Close
           </button>
+        </div>
+
+        <div className="section">
+          <label className="label">Hotkey</label>
+          <input
+            className="input"
+            value={hotkey}
+            onChange={(e) => setHotkeyValue(e.currentTarget.value)}
+            placeholder="Command+Shift+V"
+          />
+          <div className="hint">
+            Press this global shortcut to toggle PowerPaste. Default is Command+Shift+V.
+          </div>
         </div>
 
         <div className="section">
@@ -246,7 +348,9 @@ function SettingsModal(props: {
             placeholder="Set / update passphrase (stored in OS keychain)"
             disabled={!enabled}
           />
-          <div className="hint">This passphrase encrypts the sync file. Use the same passphrase on every device.</div>
+          <div className="hint">
+            This passphrase encrypts the sync file. Use the same passphrase on every device.
+          </div>
         </div>
 
         {error ? <div className="error">{error}</div> : null}
@@ -260,6 +364,7 @@ function SettingsModal(props: {
               setError("");
               try {
                 await props.onSave({
+                  hotkey: hotkey.trim(),
                   enabled,
                   provider,
                   folder,

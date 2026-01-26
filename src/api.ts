@@ -12,6 +12,7 @@ export type Settings = {
   sync_provider: SyncProvider | null;
   sync_folder: string | null;
   sync_salt_b64: string | null;
+  hotkey: string;
 };
 
 export type ClipboardItem = {
@@ -38,6 +39,10 @@ export async function setSyncSettings(args: {
     folder: args.folder,
     passphrase: args.passphrase ?? null,
   });
+}
+
+export async function setHotkey(hotkey: string): Promise<Settings> {
+  return invoke("set_hotkey", { hotkey });
 }
 
 export async function listItems(args: {

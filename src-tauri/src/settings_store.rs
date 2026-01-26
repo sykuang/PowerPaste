@@ -6,6 +6,7 @@ use std::fs;
 
 const KEYRING_SERVICE: &str = "PowerPaste";
 const KEYRING_ACCOUNT: &str = "sync-passphrase";
+const DEFAULT_HOTKEY: &str = "Command+Shift+V";
 
 pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String> {
     let settings_path = settings_path(app)?;
@@ -14,8 +15,11 @@ pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String>
             .map_err(|e| format!("failed to parse settings.json: {e}"))?;
         if s.device_id.is_empty() {
             s.device_id = new_device_id();
-            save_settings(app, &s)?;
         }
+        if s.hotkey.trim().is_empty() {
+            s.hotkey = DEFAULT_HOTKEY.to_string();
+        }
+        save_settings(app, &s)?;
         return Ok(s);
     }
 
@@ -25,6 +29,7 @@ pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String>
         sync_provider: None,
         sync_folder: None,
         sync_salt_b64: None,
+        hotkey: DEFAULT_HOTKEY.to_string(),
     };
     save_settings(app, &s)?;
     Ok(s)
@@ -49,6 +54,16 @@ pub fn set_sync_config(
     settings.sync_enabled = enabled;
     settings.sync_provider = provider;
     settings.sync_folder = folder;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_hotkey(app: &tauri::AppHandle, mut settings: Settings, hotkey: String) -> Result<Settings, String> {
+    let hk = hotkey.trim();
+    if hk.is_empty() {
+        return Err("hotkey cannot be empty".to_string());
+    }
+    settings.hotkey = hk.to_string();
     save_settings(app, &settings)?;
     Ok(settings)
 }
@@ -93,6 +108,7 @@ pub fn ensure_sync_salt_b64(app: &tauri::AppHandle, mut settings: Settings) -> R
 }
 
 fn new_device_id() -> String {
+    // Random, stable per-install identifier.
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
