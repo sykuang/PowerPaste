@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "powerpaste",
+  "productName": "PowerPaste",
   "version": "0.1.0",
   "identifier": "com.kenkuang.powerpaste",
   "build": {
@@ -10,14 +10,15 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "title": "powerpaste",
-        "width": 1200,
-        "height": 260,
+        "title": "PowerPaste",
+        "width": 980,
+        "height": 240,
         "visible": false,
         "decorations": false,
-        "resizable": false,
+        "resizable": true,
         "alwaysOnTop": true
       }
     ],
