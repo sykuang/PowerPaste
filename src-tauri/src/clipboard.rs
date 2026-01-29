@@ -58,6 +58,7 @@ impl ClipboardWatcher {
 
     pub fn stop(&self) {
         if let Ok(mut guard) = self.stop_flag.lock() {
+            let _was = *guard;
             *guard = true;
         }
     }

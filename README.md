@@ -24,6 +24,11 @@ npm install
 npm run tauri dev
 ```
 
+## Tests
+
+- `npm test` / `npm run test:run` runs UI unit tests (Vitest + JSDOM). These do **not** execute the native Tauri runtime, so they can't catch platform-specific window/tray behavior (e.g. show/hide lifecycle on macOS).
+- To cover native behavior, add an end-to-end/integration test layer that launches the built app and drives it (for example via a WebDriver-based approach or Playwright + a Tauri runner).
+
 ## Sync model (MVP)
 
 - Local clipboard history is stored in SQLite under the app data directory.

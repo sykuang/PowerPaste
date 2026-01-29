@@ -16,6 +16,16 @@ pub enum ClipboardItemKind {
     Text,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UiMode {
+    /// Floating UI near cursor position
+    #[default]
+    Floating,
+    /// Fixed UI at the bottom of the screen
+    Fixed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub device_id: String,
@@ -25,6 +35,10 @@ pub struct Settings {
     pub sync_salt_b64: Option<String>,
     #[serde(default)]
     pub hotkey: String,
+    #[serde(default)]
+    pub theme: String,
+    #[serde(default)]
+    pub ui_mode: UiMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

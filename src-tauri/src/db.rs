@@ -4,6 +4,9 @@ use rusqlite::{params, Connection};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+#[path = "migrations/mod.rs"]
+mod migrations;
+
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -17,26 +20,50 @@ fn open(app: &tauri::AppHandle) -> Result<Connection, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create db parent dir: {e}"))?;
     }
-    let conn = Connection::open(path).map_err(|e| format!("failed to open sqlite db: {e}"))?;
-    init(&conn)?;
+    let mut conn = Connection::open(path).map_err(|e| format!("failed to open sqlite db: {e}"))?;
+    migrate(&mut conn)?;
     Ok(conn)
 }
 
-fn init(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "\
-        PRAGMA journal_mode=WAL;\
-        CREATE TABLE IF NOT EXISTS clipboard_items (\
-          id TEXT PRIMARY KEY,\
-          kind TEXT NOT NULL,\
-          text TEXT NOT NULL,\
-          created_at_ms INTEGER NOT NULL,\
-          pinned INTEGER NOT NULL DEFAULT 0\
-        );\
-        CREATE INDEX IF NOT EXISTS idx_clipboard_items_created_at ON clipboard_items(created_at_ms DESC);\
-        ",
+fn migrate(conn: &mut Connection) -> Result<(), String> {
+    // Enable WAL mode
+    conn.execute_batch("PRAGMA journal_mode=WAL;")
+        .map_err(|e| format!("failed to enable WAL: {e}"))?;
+
+    // Create migrations table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at_ms INTEGER NOT NULL)",
+        [],
     )
-    .map_err(|e| format!("failed to init db: {e}"))
+    .map_err(|e| format!("failed to init migrations table: {e}"))?;
+
+    let tx = conn.transaction().map_err(|e| format!("failed to start migration tx: {e}"))?;
+
+    for (name, sql) in migrations::MIGRATIONS {
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM _migrations WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to check migration {name}: {e}"))?;
+
+        if count == 0 {
+            tx.execute_batch(sql)
+                .map_err(|e| format!("failed to apply migration {name}: {e}"))?;
+            
+            tx.execute(
+                "INSERT INTO _migrations (name, applied_at_ms) VALUES (?1, ?2)",
+                params![name, now_ms()],
+            )
+            .map_err(|e| format!("failed to record migration {name}: {e}"))?;
+            
+            eprintln!("[powerpaste] applied migration: {name}");
+        }
+    }
+
+    tx.commit().map_err(|e| format!("failed to commit migrations: {e}"))?;
+    Ok(())
 }
 
 pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<ClipboardItem>, String> {

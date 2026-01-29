@@ -1,4 +1,4 @@
-use crate::models::{Settings, SyncProvider};
+use crate::models::{Settings, SyncProvider, UiMode};
 use crate::paths::{app_data_dir, settings_path};
 use base64::Engine as _;
 use rand::RngCore;
@@ -7,8 +7,13 @@ use std::fs;
 const KEYRING_SERVICE: &str = "PowerPaste";
 const KEYRING_ACCOUNT: &str = "sync-passphrase";
 const DEFAULT_HOTKEY: &str = "Command+Shift+V";
+const DEFAULT_THEME: &str = "glass";
 
-pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String> {
+pub fn get<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Settings, String> {
+    load_or_init_settings(app)
+}
+
+pub fn load_or_init_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Settings, String> {
     let settings_path = settings_path(app)?;
     if let Ok(raw) = fs::read_to_string(&settings_path) {
         let mut s: Settings = serde_json::from_str(&raw)
@@ -18,6 +23,9 @@ pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String>
         }
         if s.hotkey.trim().is_empty() {
             s.hotkey = DEFAULT_HOTKEY.to_string();
+        }
+        if s.theme.trim().is_empty() {
+            s.theme = DEFAULT_THEME.to_string();
         }
         save_settings(app, &s)?;
         return Ok(s);
@@ -30,12 +38,31 @@ pub fn load_or_init_settings(app: &tauri::AppHandle) -> Result<Settings, String>
         sync_folder: None,
         sync_salt_b64: None,
         hotkey: DEFAULT_HOTKEY.to_string(),
+        theme: DEFAULT_THEME.to_string(),
+        ui_mode: UiMode::default(),
     };
     save_settings(app, &s)?;
     Ok(s)
 }
 
-pub fn save_settings(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
+pub fn set_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, theme: String) -> Result<Settings, String> {
+    let t = theme.trim();
+    if t.is_empty() {
+        return Err("theme cannot be empty".to_string());
+    }
+    // Keep this as a simple string so we can add themes without migrations.
+    settings.theme = t.to_string();
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_ui_mode<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, ui_mode: UiMode) -> Result<Settings, String> {
+    settings.ui_mode = ui_mode;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn save_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>, settings: &Settings) -> Result<(), String> {
     let dir = app_data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create app data dir: {e}"))?;
     let path = settings_path(app)?;
@@ -44,8 +71,8 @@ pub fn save_settings(app: &tauri::AppHandle, settings: &Settings) -> Result<(), 
     fs::write(path, raw).map_err(|e| format!("failed to write settings: {e}"))
 }
 
-pub fn set_sync_config(
-    app: &tauri::AppHandle,
+pub fn set_sync_config<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     mut settings: Settings,
     enabled: bool,
     provider: Option<SyncProvider>,
@@ -58,7 +85,7 @@ pub fn set_sync_config(
     Ok(settings)
 }
 
-pub fn set_hotkey(app: &tauri::AppHandle, mut settings: Settings, hotkey: String) -> Result<Settings, String> {
+pub fn set_hotkey<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, hotkey: String) -> Result<Settings, String> {
     let hk = hotkey.trim();
     if hk.is_empty() {
         return Err("hotkey cannot be empty".to_string());
@@ -96,7 +123,7 @@ pub fn clear_sync_passphrase() -> Result<(), String> {
     }
 }
 
-pub fn ensure_sync_salt_b64(app: &tauri::AppHandle, mut settings: Settings) -> Result<Settings, String> {
+pub fn ensure_sync_salt_b64<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings) -> Result<Settings, String> {
     if settings.sync_salt_b64.is_some() {
         return Ok(settings);
     }

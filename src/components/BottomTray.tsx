@@ -21,13 +21,33 @@ export function BottomTray(props: BottomTrayProps) {
     const MENU_H = 190;
     const margin = 8;
 
-    const maxLeft = Math.max(margin, window.innerWidth - MENU_W - margin);
-    const maxTop = Math.max(margin, window.innerHeight - MENU_H - margin);
+    // Bottom-align the menu with the cursor (cursor at menu bottom)
+    let top = props.contextMenu.y - MENU_H;
+    
+    // Ensure menu doesn't go above the top of the screen
+    if (top < margin) {
+      top = margin;
+    }
 
+    const maxLeft = Math.max(margin, window.innerWidth - MENU_W - margin);
     const left = Math.min(Math.max(props.contextMenu.x, margin), maxLeft);
-    const top = Math.min(Math.max(props.contextMenu.y, margin), maxTop);
+    
     return { left, top };
   }, [props.contextMenu]);
+
+  // Determine if context menu item is part of selection
+  const contextItemIsSelected = useMemo(() => {
+    if (!props.contextMenu) return false;
+    return props.selectedIds.has(props.contextMenu.item.id);
+  }, [props.contextMenu, props.selectedIds]);
+
+  // Count of items that will be deleted
+  const deleteCount = useMemo(() => {
+    if (!props.contextMenu) return 0;
+    return contextItemIsSelected && props.selectedIds.size > 0 
+      ? props.selectedIds.size 
+      : 1;
+  }, [props.contextMenu, contextItemIsSelected, props.selectedIds]);
 
   return (
     <div className="bottomTray" role="region" aria-label="Quick copy tray">
@@ -167,7 +187,7 @@ export function BottomTray(props: BottomTrayProps) {
               props.onCloseContextMenu();
             }}
           >
-            Delete
+            {deleteCount > 1 ? `Delete ${deleteCount} items` : "Delete"}
           </button>
         </div>
       )}

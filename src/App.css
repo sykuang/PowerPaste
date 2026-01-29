@@ -15,9 +15,11 @@
   --pp-accent-soft: rgba(37, 99, 235, 0.14);
   --pp-danger-text: #b91c1c;
   --pp-danger-border: rgba(239, 68, 68, 0.35);
-  color: var(--pp-text);
-  background: var(--pp-bg);
   --tray-h: 216px;
+}
+
+html, body {
+  background: transparent !important;
 }
 
 html[data-theme="glass"] {
@@ -74,12 +76,28 @@ html[data-theme="aurora"] {
 
 body {
   margin: 0;
+  background: transparent;
+}
+
+#root {
+  background: transparent;
+  border: none;
+  outline: none;
 }
 
 .app {
-  height: 100vh;
+  height: calc(100vh - 4px);
+  margin: 2px;
   display: flex;
   flex-direction: column;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 10px 60px rgba(0, 0, 0, 0.3);
+  background-color: #f7f7fb;
+  background: var(--pp-bg);
+  color: var(--pp-text);
+  /* Clip the content to the rounded corners */
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
 }
 
 .topbar {
@@ -171,9 +189,59 @@ body {
 
 .settingsWindow {
   height: 100vh;
+  margin: 0;
+  background: transparent !important;
+  padding: 16px;
+  box-sizing: border-box;
+  overflow: hidden;
+  box-shadow: none !important;
+  border-radius: 0;
+  border: none !important;
+  outline: none !important;
+  -webkit-mask-image: none;
+}
+
+.settingsWindow .modalBackdrop,
+.settingsWindow .modalBackdropStatic {
+  background: transparent !important;
+  overflow: hidden;
+  border: none !important;
+  outline: none !important;
+  padding: 0;
 }
 
 .settingsWindow .modal {
+  /* No dragging - let everything be clickable */
+  -webkit-app-region: no-drag;
+  border: none;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.settingsWindow .modalHeader {
+  -webkit-app-region: no-drag;
+  cursor: default;
+  padding: 4px 0 8px 0;
+  margin: -4px -4px 10px -4px;
+  border-radius: 14px 14px 0 0;
+}
+
+.settingsWindow .modalHeader .modalTitle {
+  -webkit-app-region: no-drag;
+  cursor: default;
+}
+
+/* All interactive elements must opt out of dragging */
+.settingsWindow .modal button,
+.settingsWindow .modal .btn,
+.settingsWindow .modal input,
+.settingsWindow .modal select,
+.settingsWindow .modal label,
+.settingsWindow .modal .section {
+  -webkit-app-region: no-drag;
+}
+
+.settingsWindow.app {
   width: min(860px, 100%);
 }
 
@@ -329,8 +397,8 @@ body {
 
 .trayCard {
   flex: 0 0 auto;
-  width: 260px;
-  height: 156px;
+  width: 320px;
+  height: 186px;
   scroll-snap-align: start;
   border-radius: 16px;
   border: 1px solid var(--pp-border);

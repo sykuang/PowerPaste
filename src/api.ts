@@ -117,3 +117,7 @@ export async function setOverlayPreferredSize(args: { width: number; height: num
 export async function hideMainWindow(): Promise<void> {
   return invoke("hide_main_window");
 }
+
+export async function enableMouseEvents(): Promise<void> {
+  return invoke("enable_mouse_events");
+}

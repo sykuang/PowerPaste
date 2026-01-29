@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   checkPermissions,
   deleteItem,
+  enableMouseEvents,
   getSettings,
   listItems,
   openAccessibilitySettings,
@@ -69,7 +70,8 @@ function App() {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       return b.created_at_ms - a.created_at_ms;
     });
-    return copy.slice(0, 12);
+    // Show all items (removed the slice limit to allow scrolling)
+    return copy;
   }, [items]);
 
   const selectedItems = useMemo(() => {
@@ -111,13 +113,24 @@ function App() {
   const handleDelete = useCallback(async (item: ClipboardItem) => {
     let clearAfterMs = 1200;
     try {
-      await deleteItem(item.id);
-      setSyncStatus("Item deleted");
+      // If the item being deleted is selected, delete all selected items
+      const itemsToDelete = selectedIds.has(item.id) && selectedIds.size > 0
+        ? Array.from(selectedIds)
+        : [item.id];
+
+      // Delete all items in parallel
+      await Promise.all(itemsToDelete.map(id => deleteItem(id)));
+      
+      const count = itemsToDelete.length;
+      setSyncStatus(count === 1 ? "Item deleted" : `${count} items deleted`);
+      
+      // Clear deleted items from selection
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        next.delete(item.id);
+        itemsToDelete.forEach(id => next.delete(id));
         return next;
       });
+      
       await reload();
     } catch (e) {
       setSyncStatus(String(e));
@@ -125,7 +138,7 @@ function App() {
     } finally {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
-  }, []);
+  }, [selectedIds]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
@@ -211,6 +224,14 @@ function App() {
     if (!settings?.theme) return;
     document.documentElement.dataset.theme = settings.theme;
   }, [settings?.theme]);
+
+  // Enable mouse events for settings window (fixes macOS click-through issue)
+  useEffect(() => {
+    if (!IS_SETTINGS_WINDOW) return;
+    enableMouseEvents().catch((e) => {
+      console.error("[powerpaste] failed to enable mouse events:", e);
+    });
+  }, []);
 
   useEffect(() => {
     if (IS_SETTINGS_WINDOW) return;
@@ -506,7 +527,9 @@ function App() {
         minWidth: 720,
         minHeight: 520,
         resizable: true,
-        decorations: true,
+        decorations: false,
+        transparent: true,
+        shadow: false,
       });
 
       // Best-effort: if window creation fails, surface it in status.
