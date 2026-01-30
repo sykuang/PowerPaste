@@ -331,6 +331,8 @@ body {
   background: rgba(12, 10, 9, 0.12);
   backdrop-filter: blur(14px);
   z-index: 50;
+  /* Fade hint on right edge when more content is scrollable */
+  --scroll-fade: linear-gradient(to right, transparent 0%, transparent calc(100% - 40px), rgba(0,0,0,0.05) 100%);
 }
 
 .trayHeader {
@@ -365,20 +367,24 @@ body {
 .trayCards {
   display: flex;
   gap: 12px;
-  padding: 10px 14px 14px;
+  padding: 10px 14px 10px;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x mandatory;
   scrollbar-width: thin;
-  scrollbar-color: var(--pp-border) transparent;
+  scrollbar-color: var(--pp-muted) var(--pp-border-xweak);
+  /* Force scrollbar to always be visible on macOS */
+  -webkit-overflow-scrolling: touch;
 }
 
+/* Always show scrollbar when content overflows */
 .trayCards::-webkit-scrollbar {
-  height: 10px;
+  height: 8px;
+  display: block;
 }
 
 .trayCards::-webkit-scrollbar-track {
-  background: var(--pp-border-xweak);
+  background: var(--pp-border-weak);
   border-radius: 999px;
   margin: 0 14px;
 }
@@ -386,13 +392,11 @@ body {
 .trayCards::-webkit-scrollbar-thumb {
   background: var(--pp-muted);
   border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  min-width: 40px;
 }
 
 .trayCards::-webkit-scrollbar-thumb:hover {
   background: var(--pp-text);
-  background-clip: padding-box;
 }
 
 .trayCard {

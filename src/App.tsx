@@ -74,6 +74,16 @@ function App() {
     return copy;
   }, [items]);
 
+  // Keep refs to avoid stale closures in event handlers
+  const trayItemsRef = useRef(trayItems);
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => {
+    trayItemsRef.current = trayItems;
+  }, [trayItems]);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
+
   const selectedItems = useMemo(() => {
     if (selectedIds.size === 0) return [];
     // With only the BottomTray visible, selection should apply to tray cards.
@@ -101,9 +111,30 @@ function App() {
   }, [selectedItems]);
 
   const selectAll = useCallback(() => {
-    setSelectedIds(new Set(trayItems.map((it) => it.id)));
-    setLastSelectedIndex(trayItems.length > 0 ? trayItems.length - 1 : null);
-  }, [trayItems]);
+    // Use refs to always get the latest values, avoiding stale closure issues
+    const currentItems = trayItemsRef.current;
+    const currentSelectedIds = selectedIdsRef.current;
+    console.log("[powerpaste] selectAll called, items count:", currentItems.length, "selected:", currentSelectedIds.size);
+    
+    if (currentItems.length === 0) {
+      console.log("[powerpaste] selectAll: no items to select");
+      return;
+    }
+    
+    // Toggle: if all items are already selected, deselect all
+    const allSelected = currentItems.length > 0 && 
+      currentItems.every((it) => currentSelectedIds.has(it.id));
+    
+    if (allSelected) {
+      console.log("[powerpaste] selectAll: all already selected, deselecting all");
+      setSelectedIds(new Set());
+      setLastSelectedIndex(null);
+    } else {
+      console.log("[powerpaste] selectAll: selecting all items");
+      setSelectedIds(new Set(currentItems.map((it) => it.id)));
+      setLastSelectedIndex(currentItems.length - 1);
+    }
+  }, []); // No dependencies - uses refs instead
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());

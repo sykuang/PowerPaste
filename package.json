@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:run": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "install:dmg": "DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1) && hdiutil attach \"$DMG\" && cp -R '/Volumes/PowerPaste/PowerPaste.app' /Applications/ && hdiutil detach '/Volumes/PowerPaste'"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { ClipboardItem } from "../api";
 
 interface BottomTrayProps {
@@ -15,6 +15,23 @@ interface BottomTrayProps {
 }
 
 export function BottomTray(props: BottomTrayProps) {
+  const trayCardsRef = useRef<HTMLDivElement>(null);
+
+  // Convert vertical mouse wheel to horizontal scroll
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const container = trayCardsRef.current;
+    if (!container) return;
+    
+    // If there's horizontal scroll (e.g., trackpad), let it work naturally
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    
+    // Convert vertical scroll to horizontal
+    if (e.deltaY !== 0) {
+      e.preventDefault();
+      container.scrollLeft += e.deltaY;
+    }
+  }, []);
+
   const clampedMenuPosition = useMemo(() => {
     if (!props.contextMenu) return null;
     const MENU_W = 220;
@@ -68,7 +85,12 @@ export function BottomTray(props: BottomTrayProps) {
         </div>
       </div>
 
-      <div className="trayCards" aria-label="Clipboard items">
+      <div 
+        ref={trayCardsRef}
+        className="trayCards" 
+        aria-label="Clipboard items"
+        onWheel={handleWheel}
+      >
         {props.items.map((item) => {
           const title = (item.text.split(/\r?\n/)[0] ?? "").trim();
           const isSelected = props.selectedIds.has(item.id);

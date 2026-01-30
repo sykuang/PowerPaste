@@ -36,6 +36,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1"
+core-graphics = "0.25.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }
