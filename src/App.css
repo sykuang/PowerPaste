@@ -198,6 +198,12 @@ body {
   background: var(--pp-surface-strong);
   outline: none;
   font-size: 13px;
+  /* Ensure the input receives pointer events */
+  pointer-events: auto;
+  /* Enable text selection and cursor */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
 
 .search:focus {

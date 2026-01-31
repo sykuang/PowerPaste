@@ -69,6 +69,7 @@ function App() {
   const [saveToTabItem, setSaveToTabItem] = useState<ClipboardItem | null>(null);
 
   const lastSentOverlaySizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const filteredQuery = useMemo(() => query.trim(), [query]);
 
@@ -515,6 +516,38 @@ function App() {
     };
   }, [clearSelection, copySelected, selectAll]);
 
+  // Listen for panel_shown event to focus the search input
+  useEffect(() => {
+    if (IS_SETTINGS_WINDOW) return;
+
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      unlisten = await listen("powerpaste://panel_shown", () => {
+        console.log("[powerpaste] panel_shown event received, focusing search input");
+        // Multiple attempts with increasing delays to ensure focus works
+        const focusInput = () => {
+          const input = searchInputRef.current;
+          if (input) {
+            input.focus();
+            // Also try selecting the content to make focus more obvious
+            input.select();
+            console.log("[powerpaste] focus() called on search input, activeElement:", document.activeElement?.tagName);
+          }
+        };
+        // Try immediately
+        focusInput();
+        // Try after a frame
+        requestAnimationFrame(focusInput);
+        // Try after a short delay
+        setTimeout(focusInput, 50);
+        setTimeout(focusInput, 150);
+      });
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     void (async () => {
@@ -744,6 +777,7 @@ function App() {
 
         <div className="topbarCenter">
           <input
+            ref={searchInputRef}
             className="search"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
