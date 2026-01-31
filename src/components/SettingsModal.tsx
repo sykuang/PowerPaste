@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { Theme, UiMode, SyncProvider, Settings } from "../api";
+import { Theme, UiMode, SyncProvider, Settings, setShowDockIcon } from "../api";
 
 interface SettingsModalProps {
   settings: Settings;
   onClose: () => void;
   closeOnBackdrop?: boolean;
+  /** Current platform, used to conditionally show macOS-only settings */
+  platform?: "macos" | "windows" | "linux" | "unknown";
   onSave: (args: {
     hotkey: string;
     enabled: boolean;
@@ -19,6 +21,7 @@ interface SettingsModalProps {
 
 export function SettingsModal(props: SettingsModalProps) {
   const closeOnBackdrop = props.closeOnBackdrop ?? true;
+  const isMac = props.platform === "macos";
   const [hotkey, setHotkeyValue] = useState(props.settings.hotkey);
   const [enabled, setEnabled] = useState(props.settings.sync_enabled);
   const [provider, setProvider] = useState<SyncProvider | null>(props.settings.sync_provider);
@@ -26,6 +29,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const [passphrase, setPassphrase] = useState<string>("");
   const [theme, setTheme] = useState<Theme>(props.settings.theme ?? "glass");
   const [uiMode, setUiMode] = useState<UiMode>(props.settings.ui_mode ?? "floating");
+  const [showDockIconState, setShowDockIconState] = useState(props.settings.show_dock_icon ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
 
@@ -85,6 +89,30 @@ export function SettingsModal(props: SettingsModalProps) {
           </select>
           <div className="hint">Floating mode positions the overlay near your cursor. Fixed mode anchors it to the bottom of the screen.</div>
         </div>
+
+        {isMac && (
+          <div className="section">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={showDockIconState}
+                onChange={async (e) => {
+                  const checked = e.currentTarget.checked;
+                  setShowDockIconState(checked);
+                  try {
+                    await setShowDockIcon(checked);
+                  } catch (err) {
+                    console.error("Failed to set dock icon visibility:", err);
+                  }
+                }}
+              />
+              Show icon in Dock
+            </label>
+            <div className="hint">
+              When disabled, PowerPaste runs as a menu bar app only.
+            </div>
+          </div>
+        )}
 
         <div className="section">
           <label className="checkbox">

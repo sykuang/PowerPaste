@@ -95,11 +95,12 @@ pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<C
         text: text.to_string(),
         created_at_ms: now_ms(),
         pinned: false,
+        pin_category: None,
     };
 
     conn.execute(
-        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0],
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pin_category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None],
     )
     .map_err(|e| format!("failed to insert item: {e}"))?;
 
@@ -116,7 +117,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
         let q = format!("%{}%", q.trim());
         let mut stmt = conn
             .prepare(
-                "SELECT id, kind, text, created_at_ms, pinned \
+                "SELECT id, kind, text, created_at_ms, pinned, pin_category \
                  FROM clipboard_items \
                  WHERE text LIKE ?1 \
                  ORDER BY pinned DESC, created_at_ms DESC \
@@ -132,6 +133,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
                     text: row.get(2)?,
                     created_at_ms: row.get(3)?,
                     pinned: row.get::<_, i64>(4)? != 0,
+                    pin_category: row.get(5)?,
                 })
             })
             .map_err(|e| format!("failed to query items: {e}"))?;
@@ -144,7 +146,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, kind, text, created_at_ms, pinned \
+            "SELECT id, kind, text, created_at_ms, pinned, pin_category \
              FROM clipboard_items \
              ORDER BY pinned DESC, created_at_ms DESC \
              LIMIT ?1",
@@ -159,6 +161,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
                 text: row.get(2)?,
                 created_at_ms: row.get(3)?,
                 pinned: row.get::<_, i64>(4)? != 0,
+                pin_category: row.get(5)?,
             })
         })
         .map_err(|e| format!("failed to query items: {e}"))?;
@@ -180,13 +183,14 @@ pub fn upsert_items(app: &tauri::AppHandle, items: &[ClipboardItem]) -> Result<u
     for item in items {
         let changed = tx
             .execute(
-                "INSERT OR IGNORE INTO clipboard_items (id, kind, text, created_at_ms, pinned) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR IGNORE INTO clipboard_items (id, kind, text, created_at_ms, pinned, pin_category) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     item.id.to_string(),
                     "text",
                     item.text,
                     item.created_at_ms,
-                    if item.pinned { 1 } else { 0 }
+                    if item.pinned { 1 } else { 0 },
+                    &item.pin_category
                 ],
             )
             .map_err(|e| format!("failed to upsert item: {e}"))?;
@@ -208,6 +212,35 @@ pub fn set_pinned(app: &tauri::AppHandle, id: Uuid, pinned: bool) -> Result<(), 
     )
     .map_err(|e| format!("failed to update pinned: {e}"))?;
     Ok(())
+}
+
+/// Set the pin_category for an item. Pass None to remove from a category.
+pub fn set_pin_category(app: &tauri::AppHandle, id: Uuid, category: Option<String>) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute(
+        "UPDATE clipboard_items SET pin_category = ?1, pinned = 1 WHERE id = ?2",
+        params![category, id.to_string()],
+    )
+    .map_err(|e| format!("failed to update pin_category: {e}"))?;
+    Ok(())
+}
+
+/// List all unique pin_category values (non-null).
+pub fn list_categories(app: &tauri::AppHandle) -> Result<Vec<String>, String> {
+    let conn = open(app)?;
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT pin_category FROM clipboard_items WHERE pin_category IS NOT NULL ORDER BY pin_category")
+        .map_err(|e| format!("failed to prepare categories query: {e}"))?;
+    
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("failed to query categories: {e}"))?;
+    
+    let mut categories = Vec::new();
+    for r in rows {
+        categories.push(r.map_err(|e| format!("failed to read category: {e}"))?);
+    }
+    Ok(categories)
 }
 
 pub fn delete_item(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {

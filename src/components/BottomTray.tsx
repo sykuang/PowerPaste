@@ -4,11 +4,16 @@ import { ClipboardItem } from "../api";
 interface BottomTrayProps {
   items: ClipboardItem[];
   selectedIds: Set<string>;
+  categories: string[];
+  activeTab: string | null; // null = Clipboard
+  onTabChange: (tab: string | null) => void;
   onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
   onCopy: (item: ClipboardItem) => void;
   onPaste: (item: ClipboardItem) => void;
   onDelete: (item: ClipboardItem) => void;
   onTogglePin: (item: ClipboardItem) => void;
+  onSaveToTab: (item: ClipboardItem) => void;
+  onRemoveFromTab: (item: ClipboardItem) => void;
   contextMenu: { x: number; y: number; item: ClipboardItem } | null;
   onContextMenu: (x: number, y: number, item: ClipboardItem) => void;
   onCloseContextMenu: () => void;
@@ -68,23 +73,6 @@ export function BottomTray(props: BottomTrayProps) {
 
   return (
     <div className="bottomTray" role="region" aria-label="Quick copy tray">
-      <div className="trayHeader">
-        <div className="trayTabs" role="tablist" aria-label="Tray categories">
-          <button className="trayTab isActive" role="tab" aria-selected="true" type="button">
-            Clipboard
-          </button>
-          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
-            Useful Links
-          </button>
-          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
-            Code Snippets
-          </button>
-          <button className="trayTab" role="tab" aria-selected="false" type="button" disabled>
-            Assets
-          </button>
-        </div>
-      </div>
-
       <div 
         ref={trayCardsRef}
         className="trayCards" 
@@ -105,9 +93,10 @@ export function BottomTray(props: BottomTrayProps) {
                 const range = e.shiftKey;
                 props.onSelect(item, { additive, range });
               }}
-              onDoubleClick={() => {
-                props.onSelect(item);
-                void props.onCopy(item);
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                props.onPaste(item);
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -116,11 +105,10 @@ export function BottomTray(props: BottomTrayProps) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  props.onSelect(item);
-                  void props.onCopy(item);
+                  props.onPaste(item);
                 }
               }}
-              title="Click to select • Double-click to copy • Right-click for options"
+              title="Click to select • Double-click to paste • Right-click for options"
             >
               <div className="trayCardTop">
                 <div className="trayCardTitle">{title || "(empty)"}</div>
@@ -192,15 +180,30 @@ export function BottomTray(props: BottomTrayProps) {
           >
             Paste
           </button>
-          <button
-            className="contextMenuItem"
-            onClick={() => {
-              props.onTogglePin(props.contextMenu!.item);
-              props.onCloseContextMenu();
-            }}
-          >
-            {props.contextMenu.item.pinned ? "Unpin" : "Pin"}
-          </button>
+          
+          {/* Show different actions based on whether item is in a category */}
+          {props.contextMenu.item.pin_category ? (
+            <button
+              className="contextMenuItem"
+              onClick={() => {
+                props.onRemoveFromTab(props.contextMenu!.item);
+                props.onCloseContextMenu();
+              }}
+            >
+              Remove from tab
+            </button>
+          ) : (
+            <button
+              className="contextMenuItem"
+              onClick={() => {
+                props.onSaveToTab(props.contextMenu!.item);
+                props.onCloseContextMenu();
+              }}
+            >
+              Save to tab...
+            </button>
+          )}
+          
           <div className="contextMenuDivider" />
           <button
             className="contextMenuItem contextMenuItemDanger"

@@ -6,11 +6,13 @@ import {
   deleteItem,
   enableMouseEvents,
   getSettings,
+  listCategories,
   listItems,
   openAccessibilitySettings,
   openAutomationSettings,
   pasteText,
   hideMainWindow,
+  setItemCategory,
   setItemPinned,
   setOverlayPreferredSize,
   setHotkey,
@@ -26,6 +28,7 @@ import "./App.css";
 import { SettingsModal } from "./components/SettingsModal";
 import { PermissionsModal } from "./components/PermissionsModal";
 import { BottomTray } from "./components/BottomTray";
+import { SaveToTabModal } from "./components/SaveToTabModal";
 
 const IS_SETTINGS_WINDOW =
   typeof window !== "undefined" &&
@@ -60,19 +63,33 @@ function App() {
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: ClipboardItem } | null>(null);
 
+  // Category/tab state
+  const [categories, setCategories] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null); // null = Clipboard (recent history)
+  const [saveToTabItem, setSaveToTabItem] = useState<ClipboardItem | null>(null);
+
   const lastSentOverlaySizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const filteredQuery = useMemo(() => query.trim(), [query]);
 
   const trayItems = useMemo(() => {
-    const copy = [...items];
-    copy.sort((a, b) => {
+    let filtered = [...items];
+    
+    // Filter by active tab
+    if (activeTab === null) {
+      // Clipboard tab: show items without a category (recent clipboard history)
+      filtered = filtered.filter((item) => !item.pin_category);
+    } else {
+      // Custom tab: show items with matching category
+      filtered = filtered.filter((item) => item.pin_category === activeTab);
+    }
+    
+    filtered.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       return b.created_at_ms - a.created_at_ms;
     });
-    // Show all items (removed the slice limit to allow scrolling)
-    return copy;
-  }, [items]);
+    return filtered;
+  }, [items, activeTab]);
 
   // Keep refs to avoid stale closures in event handlers
   const trayItemsRef = useRef(trayItems);
@@ -192,6 +209,40 @@ function App() {
     []
   );
 
+  const handleSaveToTab = useCallback(
+    async (item: ClipboardItem, category: string) => {
+      let clearAfterMs = 1200;
+      try {
+        await setItemCategory(item.id, category);
+        setSyncStatus(`Saved to "${category}"`);
+        await reload();
+      } catch (e) {
+        setSyncStatus(String(e));
+        clearAfterMs = 5000;
+      } finally {
+        setTimeout(() => setSyncStatus(""), clearAfterMs);
+      }
+    },
+    []
+  );
+
+  const handleRemoveFromTab = useCallback(
+    async (item: ClipboardItem) => {
+      let clearAfterMs = 1200;
+      try {
+        await setItemCategory(item.id, null);
+        setSyncStatus("Removed from tab");
+        await reload();
+      } catch (e) {
+        setSyncStatus(String(e));
+        clearAfterMs = 5000;
+      } finally {
+        setTimeout(() => setSyncStatus(""), clearAfterMs);
+      }
+    },
+    []
+  );
+
   const selectIndex = useCallback(
     (index: number, opts: { additive?: boolean; range?: boolean } = {}) => {
       const itemAtIndex = trayItems[index];
@@ -243,12 +294,14 @@ function App() {
   );
 
   async function reload() {
-    const [s, it] = await Promise.all([
+    const [s, it, cats] = await Promise.all([
       getSettings(),
       listItems({ limit: 500, query: filteredQuery || undefined }),
+      listCategories(),
     ]);
     setSettings(s);
     setItems(it);
+    setCategories(cats);
   }
 
   useEffect(() => {
@@ -428,6 +481,28 @@ function App() {
         void copySelected();
         return;
       }
+
+      if (key === "v") {
+        // Paste first selected item (or first tray item if nothing selected)
+        e.preventDefault();
+        e.stopPropagation();
+        const currentItems = trayItemsRef.current;
+        const currentSelectedIds = selectedIdsRef.current;
+        const selectedList = currentItems.filter((it) => currentSelectedIds.has(it.id));
+        const itemToPaste = selectedList.length > 0 ? selectedList[0] : currentItems[0];
+        if (itemToPaste) {
+          // Inline paste logic to avoid stale closure issues
+          void (async () => {
+            try {
+              await pasteText(itemToPaste.text);
+              await hideMainWindow().catch(() => undefined);
+            } catch {
+              // Errors handled in UI
+            }
+          })();
+        }
+        return;
+      }
     }
 
     // Register on both document and window to maximize reliability across
@@ -480,7 +555,10 @@ function App() {
           setTimeout(() => setSyncStatus(""), 900);
           return;
         }
-        void copySelected();
+        void copySelected().then(() => {
+          // Hide the UI after copying via menu
+          void hideMainWindow().catch(() => undefined);
+        });
       });
     })();
 
@@ -510,6 +588,8 @@ function App() {
     try {
       await pasteText(item.text);
       setSyncStatus("Pasted");
+      // Hide the UI after pasting
+      await hideMainWindow().catch(() => undefined);
     } catch (e) {
       setSyncStatus(String(e));
       clearAfterMs = 5000;
@@ -601,6 +681,7 @@ function App() {
             settings={settings}
             onClose={() => void closeCurrentWindow()}
             closeOnBackdrop={false}
+            platform={permissions?.platform ?? "unknown"}
             onSave={async (next) => {
               const updatedHotkey = await setHotkey(next.hotkey);
               const updatedUiMode = await setUiMode(next.uiMode);
@@ -626,52 +707,82 @@ function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <div className="brandTitle">PowerPaste</div>
-          <div className="brandSub">
-            {syncStatus ? syncStatus : "Cross-platform clipboard history + folder sync"}
-          </div>
+        <div className="topbarTabs" role="tablist" aria-label="Tray categories">
+          <button 
+            className={`topbarTab${activeTab === null ? " isActive" : ""}`}
+            role="tab" 
+            aria-selected={activeTab === null}
+            type="button"
+            onClick={() => setActiveTab(null)}
+          >
+            📋 Clipboard
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              className={`topbarTab${activeTab === cat ? " isActive" : ""}`}
+              role="tab"
+              aria-selected={activeTab === cat}
+              type="button"
+              onClick={() => setActiveTab(cat)}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
 
-        <input
-          className="search"
-          value={query}
-          onChange={(e) => setQuery(e.currentTarget.value)}
-          onKeyDownCapture={(e) => {
-            console.log("[powerpaste] search input keydown:", e.key, "meta:", e.metaKey);
-            const isMod = e.metaKey || e.ctrlKey;
-            if (!isMod) return;
+        <div className="topbarCenter">
+          <input
+            className="search"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            onKeyDownCapture={(e) => {
+              console.log("[powerpaste] search input keydown:", e.key, "meta:", e.metaKey);
+              const isMod = e.metaKey || e.ctrlKey;
+              if (!isMod) return;
 
-            const key = e.key.toLowerCase();
+              const key = e.key.toLowerCase();
 
-            if (key === "a") {
-              console.log("[powerpaste] search input Cmd+A - selecting all cards");
-              e.preventDefault();
-              e.stopPropagation();
-              selectAll();
-              return;
-            }
+              if (key === "a") {
+                console.log("[powerpaste] search input Cmd+A - selecting all cards");
+                e.preventDefault();
+                e.stopPropagation();
+                selectAll();
+                return;
+              }
 
-            if (key === "c") {
-              console.log("[powerpaste] search input Cmd+C - copying selected");
-              e.preventDefault();
-              e.stopPropagation();
-              void copySelected();
-            }
-          }}
-          placeholder="Search your clipboard history..."
-          autoFocus
-        />
+              if (key === "c") {
+                console.log("[powerpaste] search input Cmd+C - copying selected");
+                e.preventDefault();
+                e.stopPropagation();
+                void copySelected();
+              }
+            }}
+            placeholder="Search..."
+            autoFocus
+          />
+          {syncStatus && <span className="topbarStatus">{syncStatus}</span>}
+        </div>
 
         <div className="actions">
-          <button className="btn" onClick={onSyncNow}>
-            Sync now
+          <button 
+            className="btnIcon" 
+            onClick={onSyncNow}
+            aria-label="Sync now"
+            title="Sync now"
+          >
+            ⟳
           </button>
-          <button className="btn" onClick={() => void openSettingsWindow()}>
-            Settings
+          <button 
+            className="btnIcon" 
+            onClick={() => void openSettingsWindow()}
+            aria-label="Settings"
+            title="Settings"
+          >
+            ⚙️
           </button>
           <button
-            className="btn"
+            className="btnIcon"
             type="button"
             onClick={() => {
               void hideMainWindow().catch(() => undefined);
@@ -679,7 +790,7 @@ function App() {
             aria-label="Close"
             title="Close"
           >
-            Close
+            ✕
           </button>
         </div>
       </header>
@@ -690,15 +801,32 @@ function App() {
       <BottomTray
         items={trayItems}
         selectedIds={selectedIds}
+        categories={categories}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         onSelect={selectItem}
         onCopy={onCopy}
         onPaste={onPaste}
         onDelete={handleDelete}
         onTogglePin={togglePinned}
+        onSaveToTab={(item) => setSaveToTabItem(item)}
+        onRemoveFromTab={handleRemoveFromTab}
         contextMenu={contextMenu}
         onContextMenu={(x, y, item) => setContextMenu({ x, y, item })}
         onCloseContextMenu={closeContextMenu}
       />
+
+      {/* Save to Tab Modal */}
+      {saveToTabItem && (
+        <SaveToTabModal
+          categories={categories}
+          onSave={(category) => {
+            void handleSaveToTab(saveToTabItem, category);
+            setSaveToTabItem(null);
+          }}
+          onCancel={() => setSaveToTabItem(null)}
+        />
+      )}
 
       {showPermissions ? (
         <PermissionsModal

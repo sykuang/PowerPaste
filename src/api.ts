@@ -19,6 +19,8 @@ export type Settings = {
   hotkey: string;
   theme: Theme;
   ui_mode: UiMode;
+  /** macOS only: show app icon in Dock (default false = menu bar app only) */
+  show_dock_icon: boolean;
 };
 
 export type ClipboardItem = {
@@ -27,6 +29,8 @@ export type ClipboardItem = {
   text: string;
   created_at_ms: number;
   pinned: boolean;
+  /** Optional category name for user-created tabs */
+  pin_category: string | null;
 };
 
 export type PermissionsStatus = {
@@ -79,6 +83,14 @@ export async function setItemPinned(id: string, pinned: boolean): Promise<void> 
   return invoke("set_item_pinned", { id, pinned });
 }
 
+export async function setItemCategory(id: string, category: string | null): Promise<void> {
+  return invoke("set_item_category", { id, category });
+}
+
+export async function listCategories(): Promise<string[]> {
+  return invoke("list_categories");
+}
+
 export async function deleteItem(id: string): Promise<void> {
   return invoke("delete_item", { id });
 }
@@ -120,4 +132,8 @@ export async function hideMainWindow(): Promise<void> {
 
 export async function enableMouseEvents(): Promise<void> {
   return invoke("enable_mouse_events");
+}
+
+export async function setShowDockIcon(show: boolean): Promise<Settings> {
+  return invoke("set_show_dock_icon", { show });
 }

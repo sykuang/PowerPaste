@@ -102,6 +102,11 @@ static OVERLAY_PANEL_PTR: OnceLock<usize> = OnceLock::new();
 #[cfg(target_os = "macos")]
 static KEYBOARD_MONITOR_PTR: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
+/// Stores the global mouse click monitor object pointer (leaked).
+/// Used to detect clicks outside the panel to hide it.
+#[cfg(target_os = "macos")]
+static CLICK_OUTSIDE_MONITOR_PTR: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+
 #[cfg(target_os = "macos")]
 static PANEL_INIT_RETRY_SCHEDULED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -150,6 +155,32 @@ fn macos_get_cursor_position() -> Option<(f64, f64)> {
     
     let loc = NSEvent::mouseLocation();
     Some((loc.x, loc.y))
+}
+
+/// Find the screen that contains the mouse cursor.
+#[cfg(target_os = "macos")]
+fn macos_screen_containing_cursor(mtm: objc2::MainThreadMarker) -> Option<objc2::rc::Retained<objc2_app_kit::NSScreen>> {
+    use objc2_app_kit::NSScreen;
+    
+    let (cursor_x, cursor_y) = macos_get_cursor_position()?;
+    
+    let screens = NSScreen::screens(mtm);
+    let count = screens.len();
+    
+    for i in 0..count {
+        let screen: objc2::rc::Retained<NSScreen> = unsafe {
+            objc2::msg_send_id![&*screens, objectAtIndex: i]
+        };
+        let frame = screen.frame();
+        
+        if cursor_x >= frame.origin.x && cursor_x < frame.origin.x + frame.size.width
+            && cursor_y >= frame.origin.y && cursor_y < frame.origin.y + frame.size.height
+        {
+            return Some(screen);
+        }
+    }
+    
+    None
 }
 
 /// Install a local keyboard event monitor to capture Cmd+A and Cmd+C.
@@ -244,6 +275,102 @@ fn macos_remove_keyboard_monitor() {
         eprintln!("[powerpaste] removing keyboard monitor");
         unsafe {
             // Reconstruct the retained object and let it drop
+            let monitor: *mut objc2::runtime::AnyObject = ptr as *mut _;
+            NSEvent::removeMonitor(&*monitor);
+        }
+    }
+}
+
+/// Install a global mouse click monitor to detect clicks outside the panel.
+/// NSPanel with NonactivatingPanel style doesn't trigger focus-lost events,
+/// so we need to monitor global mouse clicks to hide the panel.
+#[cfg(target_os = "macos")]
+fn macos_install_click_outside_monitor<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
+    use block2::StackBlock;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSPanel};
+    use std::ptr::NonNull;
+
+    // Check if already installed
+    let cell = CLICK_OUTSIDE_MONITOR_PTR.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return; // Already installed
+    }
+
+    eprintln!("[powerpaste] installing click-outside monitor");
+
+    let app_for_block = app_handle.clone();
+    
+    // Create a block that handles global mouse click events
+    // Global monitor receives NonNull<NSEvent> and returns nothing (void)
+    let handler = StackBlock::new(move |event: NonNull<NSEvent>| {
+        // Check if we have a panel
+        let Some(stored) = OVERLAY_PANEL_PTR.get() else {
+            return;
+        };
+        
+        // SAFETY: We store a valid NSPanel pointer
+        let panel: Retained<NSPanel> = match unsafe {
+            Retained::retain((*stored as *mut NSPanel).cast())
+        } {
+            Some(p) => p,
+            None => return,
+        };
+        
+        if !panel.isVisible() {
+            return;
+        }
+        
+        // SAFETY: NSEvent pointer is valid during callback
+        let event_ref: &NSEvent = unsafe { event.as_ref() };
+        
+        // For global monitors, locationInWindow returns screen coordinates 
+        // (since the event is not associated with any of our windows)
+        let screen_location = event_ref.locationInWindow();
+        
+        // Check if click is inside the panel frame
+        let panel_frame = panel.frame();
+        let inside = screen_location.x >= panel_frame.origin.x
+            && screen_location.x < panel_frame.origin.x + panel_frame.size.width
+            && screen_location.y >= panel_frame.origin.y
+            && screen_location.y < panel_frame.origin.y + panel_frame.size.height;
+        
+        if !inside {
+            eprintln!("[powerpaste] click outside panel detected, hiding");
+            // Hide the panel
+            let app_clone = app_for_block.clone();
+            let _ = app_for_block.run_on_main_thread(move || {
+                let _ = macos_hide_overlay_panel_if_visible(&app_clone);
+            });
+        }
+    });
+
+    // Install the monitor for left and right mouse down events (global = outside our app)
+    let mask = NSEventMask::LeftMouseDown.union(NSEventMask::RightMouseDown);
+    let monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask, &handler);
+    
+    if let Some(m) = monitor {
+        // Store the monitor pointer (leaked to keep it alive)
+        let ptr = Retained::into_raw(m) as usize;
+        *guard = Some(ptr);
+        eprintln!("[powerpaste] click-outside monitor installed successfully");
+    } else {
+        eprintln!("[powerpaste] failed to install click-outside monitor");
+    }
+}
+
+/// Remove the global mouse click monitor when panel is hidden.
+#[cfg(target_os = "macos")]
+fn macos_remove_click_outside_monitor() {
+    use objc2_app_kit::NSEvent;
+
+    let cell = CLICK_OUTSIDE_MONITOR_PTR.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    
+    if let Some(ptr) = guard.take() {
+        eprintln!("[powerpaste] removing click-outside monitor");
+        unsafe {
             let monitor: *mut objc2::runtime::AnyObject = ptr as *mut _;
             NSEvent::removeMonitor(&*monitor);
         }
@@ -399,8 +526,9 @@ fn macos_hide_overlay_panel_if_visible<R: tauri::Runtime>(app: &tauri::AppHandle
             }))
             .map_err(|e| format!("objective-c exception hiding panel: {e:?}"))?;
             
-            // Remove keyboard monitor when hiding
+            // Remove monitors when hiding
             macos_remove_keyboard_monitor();
+            macos_remove_click_outside_monitor();
             
             return Ok(());
         }
@@ -484,6 +612,36 @@ fn set_ui_mode(app: tauri::AppHandle, ui_mode: models::UiMode) -> Result<Setting
 }
 
 #[tauri::command]
+fn set_show_dock_icon(app: tauri::AppHandle, show: bool) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_show_dock_icon(&app, settings, show)?;
+    
+    #[cfg(target_os = "macos")]
+    {
+        apply_dock_icon_visibility(show);
+    }
+    
+    Ok(settings)
+}
+
+/// Apply macOS dock icon visibility based on setting.
+#[cfg(target_os = "macos")]
+fn apply_dock_icon_visibility(show: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let ns_app = NSApplication::sharedApplication(mtm);
+    
+    let policy = if show {
+        NSApplicationActivationPolicy::Regular
+    } else {
+        NSApplicationActivationPolicy::Accessory
+    };
+    let _ = ns_app.setActivationPolicy(policy);
+}
+
+#[tauri::command]
 fn list_items(app: tauri::AppHandle, limit: u32, query: Option<String>) -> Result<Vec<ClipboardItem>, String> {
     db::list_items(&app, limit, query)
 }
@@ -492,6 +650,19 @@ fn list_items(app: tauri::AppHandle, limit: u32, query: Option<String>) -> Resul
 fn set_item_pinned(app: tauri::AppHandle, id: String, pinned: bool) -> Result<(), String> {
     let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
     db::set_pinned(&app, id, pinned)
+}
+
+#[tauri::command]
+fn set_item_category(app: tauri::AppHandle, id: String, category: Option<String>) -> Result<(), String> {
+    let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
+    // Normalize: empty string becomes None
+    let category = category.filter(|s| !s.trim().is_empty());
+    db::set_pin_category(&app, id, category)
+}
+
+#[tauri::command]
+fn list_categories(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    db::list_categories(&app)
 }
 
 #[tauri::command]
@@ -856,8 +1027,9 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             }))
             .map_err(|e| format!("objective-c exception hiding panel: {e:?}"))?;
 
-            // Remove keyboard monitor when hiding
+            // Remove monitors when hiding
             macos_remove_keyboard_monitor();
+            macos_remove_click_outside_monitor();
 
             // Restore agent/app-less behavior when hidden.
             let app = NSApplication::sharedApplication(mtm);
@@ -878,35 +1050,15 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
         // Show: activate app (helps on some systems), then order front.
         let app = NSApplication::sharedApplication(mtm);
-        // IMPORTANT: macOS menu shortcuts (Cmd+A/C) often won't dispatch unless we're a
-        // Regular app (i.e., have an active menubar). We'll switch back to Accessory on hide.
-        let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
 
         // Recompute frame each show (handles display changes, fullscreen spaces, etc.).
-        // Use the screen containing the mouse cursor for better fullscreen support.
-        let screen = {
-            let screens = NSScreen::screens(mtm);
-            let mut target_screen: Option<Retained<NSScreen>> = None;
-            if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
-                let count = screens.len();
-                for i in 0..count {
-                    let s: Retained<NSScreen> = unsafe { objc2::msg_send_id![&*screens, objectAtIndex: i] };
-                    let f = s.frame();
-                    if cursor_x >= f.origin.x && cursor_x < f.origin.x + f.size.width
-                        && cursor_y >= f.origin.y && cursor_y < f.origin.y + f.size.height
-                    {
-                        target_screen = Some(s);
-                        break;
-                    }
-                }
-            }
-            target_screen
-                .or_else(|| panel.screen())
-                .or_else(|| NSScreen::mainScreen(mtm))
-                .ok_or("no screen found")?
-        };
+        let screen = panel
+            .screen()
+            .or_else(|| NSScreen::mainScreen(mtm))
+            .ok_or("no screen found")?;
         let screen_frame: NSRect = screen.frame();
         let (w, h) = overlay_size_for_monitor(
             screen_frame.size.width.max(1.0).round() as u32,
@@ -950,7 +1102,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         exception::catch(std::panic::AssertUnwindSafe(|| {
             panel.setLevel(NSScreenSaverWindowLevel);
             panel.setFrame_display(target, true);
-            panel.makeKeyAndOrderFront(None);
+            panel.orderFrontRegardless();
+            panel.makeKeyWindow();
         }))
         .map_err(|e| format!("objective-c exception showing panel: {e:?}"))?;
 
@@ -969,6 +1122,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
         // Install keyboard monitor to capture Cmd+A/C in the overlay
         macos_install_keyboard_monitor(window.app_handle().clone());
+        // Install click-outside monitor to hide when clicking elsewhere
+        macos_install_click_outside_monitor(window.app_handle().clone());
 
         return Ok(());
     }
@@ -1002,28 +1157,10 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
     // Create the panel using the screen's full frame, then move the existing
     // contentView (WKWebView) into it.
-    // Use the screen containing the mouse cursor for better fullscreen support.
-    let screen = {
-        let screens = NSScreen::screens(mtm);
-        let mut target_screen: Option<Retained<NSScreen>> = None;
-        if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
-            let count = screens.len();
-            for i in 0..count {
-                let s: Retained<NSScreen> = unsafe { objc2::msg_send_id![&*screens, objectAtIndex: i] };
-                let f = s.frame();
-                if cursor_x >= f.origin.x && cursor_x < f.origin.x + f.size.width
-                    && cursor_y >= f.origin.y && cursor_y < f.origin.y + f.size.height
-                {
-                    target_screen = Some(s);
-                    break;
-                }
-            }
-        }
-        target_screen
-            .or_else(|| ns_window.screen())
-            .or_else(|| NSScreen::mainScreen(mtm))
-            .ok_or("no screen found")?
-    };
+    let screen = ns_window
+        .screen()
+        .or_else(|| NSScreen::mainScreen(mtm))
+        .ok_or("no screen found")?;
 
     let screen_frame: NSRect = screen.frame();
     let (w, h) = overlay_size_for_monitor(
@@ -1062,7 +1199,9 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         }
     }
 
-    let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::FullSizeContentView;
+    let style = NSWindowStyleMask::Borderless
+        | NSWindowStyleMask::NonactivatingPanel
+        | NSWindowStyleMask::FullSizeContentView;
 
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
@@ -1206,7 +1345,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
     // First show.
     let app = NSApplication::sharedApplication(mtm);
-    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     if let Some(name) = macos_query_frontmost_app_name() {
         if name != "PowerPaste" {
             macos_set_last_frontmost_app_name(name);
@@ -1218,7 +1357,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     exception::catch(std::panic::AssertUnwindSafe(|| {
         panel.setLevel(NSScreenSaverWindowLevel);
         panel.setFrame_display(target, true);
-        panel.makeKeyAndOrderFront(None);
+        panel.orderFrontRegardless();
+        panel.makeKeyWindow();
     }))
     .map_err(|e| format!("objective-c exception showing panel: {e:?}"))?;
 
@@ -1235,6 +1375,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
     // Install keyboard monitor to capture Cmd+A/C in the overlay
     macos_install_keyboard_monitor(window.app_handle().clone());
+    // Install click-outside monitor to hide when clicking elsewhere
+    macos_install_click_outside_monitor(window.app_handle().clone());
 
     // Leak the panel so it remains valid even after being hidden.
     std::mem::forget(panel);
@@ -1390,9 +1532,9 @@ fn macos_set_overlay_window_active<R: tauri::Runtime>(
                 // reliable when our app is activated.
                 let app = NSApplication::sharedApplication(mtm);
 
-                // IMPORTANT: to receive Cmd+A/C menu actions on macOS we generally need to be a
-                // Regular app (active menubar). We'll revert to Accessory when hiding.
-                let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+                // Try to behave like an "agent" app (Paste-like). This can influence
+                // how windows participate in fullscreen spaces.
+                let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
                 #[allow(deprecated)]
                 app.activateIgnoringOtherApps(true);
@@ -1611,6 +1753,20 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // CRITICAL: Set activation policy BEFORE any windows are shown.
+            // This ensures macOS doesn't show the dock icon on launch.
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::MainThreadMarker;
+                use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+                
+                if let Some(mtm) = MainThreadMarker::new() {
+                    let ns_app = NSApplication::sharedApplication(mtm);
+                    // Default to Accessory (no dock icon). Will be changed if show_dock_icon is true.
+                    let _ = ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+                }
+            }
+
             #[cfg(desktop)]
             {
                 if let Some(path) = debug_log_path() {
@@ -1624,6 +1780,14 @@ pub fn run() {
             if let Ok(settings) = settings_store::load_or_init_settings(&handle) {
                 if let Err(e) = register_hotkey(&handle, &settings.hotkey) {
                     eprintln!("[powerpaste] failed to register hotkey '{}': {e}", settings.hotkey);
+                }
+                
+                // Apply saved dock icon preference (macOS only).
+                #[cfg(target_os = "macos")]
+                {
+                    if settings.show_dock_icon {
+                        apply_dock_icon_visibility(true);
+                    }
                 }
             }
 
@@ -1723,6 +1887,8 @@ pub fn run() {
             set_overlay_preferred_size,
             hide_main_window,
             set_item_pinned,
+            set_item_category,
+            list_categories,
             delete_item,
             enable_mouse_events,
             write_clipboard_text,
@@ -1730,7 +1896,8 @@ pub fn run() {
             check_permissions,
             open_accessibility_settings,
             open_automation_settings,
-            sync_now
+            sync_now,
+            set_show_dock_icon
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

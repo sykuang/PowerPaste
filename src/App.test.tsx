@@ -35,6 +35,7 @@ vi.mock("./api", () => {
         text: "Hello world",
         created_at_ms: 1,
         pinned: false,
+        pin_category: null,
       },
       {
         id: "2",
@@ -42,8 +43,11 @@ vi.mock("./api", () => {
         text: "Second item",
         created_at_ms: 2,
         pinned: true,
+        pin_category: null,
       },
     ]),
+    listCategories: vi.fn(async () => []),
+    setItemCategory: vi.fn(async () => undefined),
     setHotkey: vi.fn(async () => ({
       device_id: "test-device",
       sync_enabled: false,
@@ -82,15 +86,15 @@ vi.mock("./api", () => {
 });
 
 import App from "./App";
-import { writeClipboardText } from "./api";
+import { writeClipboardText, pasteText } from "./api";
 
 describe("App", () => {
   it("renders and shows tray clipboard items", async () => {
     render(<App />);
 
-    expect(screen.getByText("PowerPaste")).toBeInTheDocument();
+    expect(screen.getByText("📋 Clipboard")).toBeInTheDocument();
     expect(
-      screen.getByPlaceholderText("Search your clipboard history..."),
+      screen.getByPlaceholderText("Search..."),
     ).toBeInTheDocument();
 
     // Reload runs on mount; wait for mocked items to appear in the bottom tray.
@@ -183,9 +187,9 @@ describe("App", () => {
     });
   });
 
-  it("double click copies card content", async () => {
-    const writeClipboardTextMock = vi.mocked(writeClipboardText);
-    writeClipboardTextMock.mockClear();
+  it("double click pastes card content", async () => {
+    const pasteTextMock = vi.mocked(pasteText);
+    pasteTextMock.mockClear();
 
     render(<App />);
 
@@ -201,7 +205,7 @@ describe("App", () => {
     fireEvent.doubleClick(cards[0]!);
 
     await waitFor(() => {
-      expect(writeClipboardTextMock).toHaveBeenCalledWith(expectedText);
+      expect(pasteTextMock).toHaveBeenCalledWith(expectedText);
     });
   });
 });

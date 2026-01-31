@@ -8,6 +8,9 @@ pub struct ClipboardItem {
     pub text: String,
     pub created_at_ms: i64,
     pub pinned: bool,
+    /// Optional category name for user-created tabs (e.g., "Work Links", "API Keys")
+    #[serde(default)]
+    pub pin_category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +42,9 @@ pub struct Settings {
     pub theme: String,
     #[serde(default)]
     pub ui_mode: UiMode,
+    /// macOS only: show app icon in Dock (default false = menu bar app only)
+    #[serde(default)]
+    pub show_dock_icon: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

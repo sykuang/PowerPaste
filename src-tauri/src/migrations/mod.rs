@@ -12,4 +12,11 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_clipboard_items_created_at ON clipboard_items(created_at_ms DESC);\
         "
     ),
+    (
+        "002_add_pin_category",
+        "\
+        ALTER TABLE clipboard_items ADD COLUMN pin_category TEXT DEFAULT NULL;\
+        CREATE INDEX IF NOT EXISTS idx_clipboard_items_pin_category ON clipboard_items(pin_category);\
+        "
+    ),
 ];

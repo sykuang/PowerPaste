@@ -40,6 +40,7 @@ pub fn load_or_init_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Re
         hotkey: DEFAULT_HOTKEY.to_string(),
         theme: DEFAULT_THEME.to_string(),
         ui_mode: UiMode::default(),
+        show_dock_icon: false,
     };
     save_settings(app, &s)?;
     Ok(s)
@@ -58,6 +59,12 @@ pub fn set_theme<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Set
 
 pub fn set_ui_mode<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, ui_mode: UiMode) -> Result<Settings, String> {
     settings.ui_mode = ui_mode;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_show_dock_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, show: bool) -> Result<Settings, String> {
+    settings.show_dock_icon = show;
     save_settings(app, &settings)?;
     Ok(settings)
 }
