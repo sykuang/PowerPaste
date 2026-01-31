@@ -94,6 +94,7 @@ export function BottomTray(props: BottomTrayProps) {
                 props.onSelect(item, { additive, range });
               }}
               onDoubleClick={(e) => {
+                console.log("[powerpaste] trayCard double-click detected for item:", item.id);
                 e.preventDefault();
                 e.stopPropagation();
                 props.onPaste(item);

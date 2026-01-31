@@ -491,6 +491,9 @@ body {
   padding: 12px 12px 10px;
   cursor: pointer;
   overflow: hidden;
+  /* Prevent text selection on double-click */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .trayCard.isSelected {
@@ -549,6 +552,10 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
+  /* Prevent text selection on double-click from triggering unwanted behavior */
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
 }
 
 .trayCardMeta {

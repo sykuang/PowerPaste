@@ -127,7 +127,16 @@ export async function setOverlayPreferredSize(args: { width: number; height: num
 }
 
 export async function hideMainWindow(): Promise<void> {
-  return invoke("hide_main_window");
+  // Log stack trace to identify the caller
+  const stack = new Error().stack;
+  console.log("[powerpaste] hideMainWindow called from:", stack);
+  try {
+    await invoke("hide_main_window");
+    console.log("[powerpaste] hideMainWindow invoke completed");
+  } catch (e) {
+    console.error("[powerpaste] hideMainWindow error:", e);
+    throw e;
+  }
 }
 
 export async function enableMouseEvents(): Promise<void> {

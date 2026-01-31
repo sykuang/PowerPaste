@@ -495,7 +495,7 @@ function App() {
           void (async () => {
             try {
               await pasteText(itemToPaste.text);
-              await hideMainWindow().catch(() => undefined);
+              // Note: hideMainWindow is now called by the backend before pasting
             } catch {
               // Errors handled in UI
             }
@@ -557,6 +557,7 @@ function App() {
         }
         void copySelected().then(() => {
           // Hide the UI after copying via menu
+          console.log("[powerpaste] copySelected: calling hideMainWindow");
           void hideMainWindow().catch(() => undefined);
         });
       });
@@ -569,11 +570,13 @@ function App() {
   }, [copySelected, selectAll, selectedIds]);
 
   async function onCopy(item: ClipboardItem) {
+    console.log("[powerpaste] onCopy called for item:", item.id);
     let clearAfterMs = 1200;
     try {
       await writeClipboardText(item.text);
       setSyncStatus("Copied to clipboard");
       // Hide the UI after copying
+      console.log("[powerpaste] onCopy: calling hideMainWindow");
       await hideMainWindow().catch(() => undefined);
     } catch (e) {
       setSyncStatus(String(e));
@@ -584,13 +587,16 @@ function App() {
   }
 
   async function onPaste(item: ClipboardItem) {
+    console.log("[powerpaste] onPaste called for item:", item.id, item.text.substring(0, 50));
     let clearAfterMs = 1200;
     try {
+      console.log("[powerpaste] calling pasteText...");
       await pasteText(item.text);
+      console.log("[powerpaste] pasteText completed");
       setSyncStatus("Pasted");
-      // Hide the UI after pasting
-      await hideMainWindow().catch(() => undefined);
+      // Note: hideMainWindow is now called by the backend before pasting
     } catch (e) {
+      console.error("[powerpaste] pasteText error:", e);
       setSyncStatus(String(e));
       clearAfterMs = 5000;
       setShowPermissions(true);
@@ -629,9 +635,14 @@ function App() {
         return;
       }
 
+      // In dev mode, use the current origin; in production, use relative path
+      const isDev = window.location.hostname === "localhost";
+      const settingsUrl = isDev 
+        ? `${window.location.origin}/?settings=1`
+        : "index.html?settings=1";
+
       const win = new WebviewWindow("settings", {
-        // Use an explicit HTML entry so it works in both dev server and bundled builds.
-        url: "index.html?settings=1",
+        url: settingsUrl,
         title: "Settings — PowerPaste",
         width: 860,
         height: 640,
@@ -785,6 +796,7 @@ function App() {
             className="btnIcon"
             type="button"
             onClick={() => {
+              console.log("[powerpaste] Close button clicked: calling hideMainWindow");
               void hideMainWindow().catch(() => undefined);
             }}
             aria-label="Close"
