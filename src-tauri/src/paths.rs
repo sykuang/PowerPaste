@@ -11,7 +11,18 @@ pub fn settings_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Pat
     Ok(app_data_dir(app)?.join("settings.json"))
 }
 
+/// Returns the database path.
+/// 
+/// If `POWERPASTE_TEST_DB_PATH` environment variable is set, uses that path
+/// for test isolation. Otherwise uses the default app data directory path.
 pub fn db_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    // Check for test database path override (for E2E test isolation)
+    if let Ok(test_path) = std::env::var("POWERPASTE_TEST_DB_PATH") {
+        if !test_path.is_empty() {
+            eprintln!("[powerpaste] using test database: {test_path}");
+            return Ok(PathBuf::from(test_path));
+        }
+    }
     Ok(app_data_dir(app)?.join("powerpaste.sqlite3"))
 }
 

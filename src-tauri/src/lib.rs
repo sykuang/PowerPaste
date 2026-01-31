@@ -1795,6 +1795,17 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
 
+                // Open DevTools if POWERPASTE_DEVTOOLS_PORT is set (for E2E testing with Playwright).
+                // The port value itself is currently not used by Tauri's WebView, but this env var
+                // signals that we're in a test environment and should open DevTools.
+                #[cfg(debug_assertions)]
+                {
+                    if std::env::var("POWERPASTE_DEVTOOLS_PORT").is_ok() {
+                        eprintln!("[powerpaste] opening devtools for E2E testing");
+                        window.open_devtools();
+                    }
+                }
+
                 let window_for_event = window.clone();
                 window.on_window_event(move |event| {
                     match event {
