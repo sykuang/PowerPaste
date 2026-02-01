@@ -120,11 +120,10 @@ body {
 }
 
 .topbar {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
+  display: flex;
+  justify-content: center;
   align-items: center;
-  padding: 8px 12px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--pp-border-weak);
   background: var(--pp-surface);
   backdrop-filter: blur(var(--pp-blur-md)) var(--pp-saturate);
@@ -133,6 +132,7 @@ body {
     inset 0 1px 0 0 var(--pp-shine),
     inset 0 0 0 1px rgba(255, 255, 255, 0.1);
   -webkit-app-region: no-drag;
+  gap: 8px;
 }
 
 .topbar input,
@@ -140,14 +140,53 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.topbarPinboards {
+/* Center section: All controls together */
+.topbarCenter {
   display: flex;
-  gap: 6px;
   align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.topbarStatus {
+  position: absolute;
+  right: 16px;
+  font-size: 12px;
+  color: var(--pp-muted);
+  white-space: nowrap;
+}
+
+/* Generic icon button for topbar */
+.topbarIconBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--pp-muted);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.topbarIconBtn:hover {
+  color: var(--pp-text);
+  background: var(--pp-surface-strong);
+}
+
+/* Settings button positioned on the right */
+.topbarSettings {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .topbarPinboard {
-  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
   border-radius: 999px;
   border: 1px solid var(--pp-border);
   background: color-mix(in srgb, var(--pp-surface) 85%, transparent);
@@ -158,9 +197,17 @@ body {
   transition: all 0.15s ease;
 }
 
+.topbarPinboard svg {
+  opacity: 0.6;
+}
+
 .topbarPinboard.isActive {
   border-color: var(--pp-accent-border);
   background: var(--pp-accent-soft);
+}
+
+.topbarPinboard.isActive svg {
+  opacity: 1;
 }
 
 .topbarPinboard:hover:not(.isActive) {
@@ -168,46 +215,35 @@ body {
   background: var(--pp-surface-strong);
 }
 
-.topbarCenter {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+.topbarPinboardDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pp-accent);
 }
 
-.topbarStatus {
-  font-size: 12px;
-  color: var(--pp-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.search {
-  flex: 1;
-  min-width: 120px;
-  max-width: 360px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--pp-border);
+/* Search input */
+.searchInput {
+  width: 180px;
+  height: 28px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--pp-accent-border);
   background: var(--pp-surface-strong);
   color: var(--pp-text);
   outline: none;
   font-size: 13px;
-  /* Ensure the input receives pointer events */
-  pointer-events: auto;
-  /* Enable text selection and cursor */
   -webkit-user-select: text;
   user-select: text;
-  cursor: text;
 }
 
-.search::placeholder {
+.searchInput::placeholder {
   color: var(--pp-muted);
   opacity: 0.8;
 }
 
-.search:focus {
-  border-color: var(--pp-accent-border);
+.searchInput:focus {
+  border-color: var(--pp-accent);
 }
 
 .actions {
@@ -1113,6 +1149,74 @@ body {
   width: min(400px, 90vw);
 }
 
+/* New Pinboard Modal */
+.newPinboardModal {
+  width: min(320px, 90vw);
+}
+
+.newPinboardModal h3,
+.iconPickerModal h3 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.newPinboardModal .input {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+/* Icon Picker Modal */
+.iconPickerModal {
+  width: min(360px, 90vw);
+}
+
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.iconOption {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface);
+  color: var(--pp-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.iconOption:hover {
+  border-color: var(--pp-accent-border);
+  color: var(--pp-text);
+  background: var(--pp-surface-strong);
+}
+
+.iconOption.isSelected {
+  border-color: var(--pp-accent);
+  background: var(--pp-accent-soft);
+  color: var(--pp-accent);
+}
+
+/* Pinboard rename input */
+.pinboardRenameInput {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--pp-accent);
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  margin: 0;
+  width: 80px;
+  outline: none;
+}
+
 .pinboardList {
   display: flex;
   flex-wrap: wrap;
@@ -1161,11 +1265,16 @@ body {
 .btn:focus-visible,
 .btnIcon:focus-visible,
 .btnPrimary:focus-visible,
-.search:focus-visible,
+.topbarIconBtn:focus-visible,
 .topbarPinboard:focus-visible,
 .contextMenuItem:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--pp-accent), 0 0 0 4px var(--pp-accent-soft);
+}
+
+.searchInput:focus-visible {
+  outline: none;
+  border-color: var(--pp-accent);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -1227,14 +1336,18 @@ html[data-theme="dark"] .contextMenu {
 
 html[data-theme="dark"] .input,
 html[data-theme="dark"] .select,
-html[data-theme="dark"] .search {
+html[data-theme="dark"] .topbarIconBtn,
+html[data-theme="dark"] .searchInput {
   background: rgba(20, 20, 32, 0.8);
   border-color: rgba(255, 255, 255, 0.12);
 }
 
+html[data-theme="dark"] .searchInput:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
 html[data-theme="dark"] .input:focus,
-html[data-theme="dark"] .select:focus,
-html[data-theme="dark"] .search:focus {
+html[data-theme="dark"] .select:focus {
   border-color: rgba(59, 130, 246, 0.5);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }

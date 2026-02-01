@@ -93,9 +93,10 @@ describe("App", () => {
   it("renders and shows tray clipboard items", async () => {
     render(<App />);
 
-    expect(screen.getByText("📋 Clipboard")).toBeInTheDocument();
+    expect(screen.getByText("Clipboard History")).toBeInTheDocument();
+    // Search is now an icon button that expands on click
     expect(
-      screen.getByPlaceholderText("Search..."),
+      screen.getByRole("button", { name: /search/i }),
     ).toBeInTheDocument();
 
     // Reload runs on mount; wait for mocked items to appear in the bottom tray.

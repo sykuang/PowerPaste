@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
 import {
   checkPermissions,
   deleteItem,
@@ -49,12 +51,44 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+// Available icons for pinboards
+const PINBOARD_ICONS: Record<string, { path: string; viewBox?: string }> = {
+  clock: { path: "M8 4v4l3 3M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12Z" },
+  star: { path: "M8 1l2 5h5l-4 3.5 1.5 5.5L8 12l-4.5 3 1.5-5.5L1 6h5l2-5z" },
+  heart: { path: "M8 14s-6-4-6-7.5a3.5 3.5 0 0 1 6-2.5 3.5 3.5 0 0 1 6 2.5c0 3.5-6 7.5-6 7.5z" },
+  bookmark: { path: "M3 2h10v13l-5-3-5 3V2z" },
+  folder: { path: "M2 4h5l2 2h5v8H2V4z" },
+  tag: { path: "M1 8V2h6l7 7-6 6-7-7zm3-3a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" },
+  code: { path: "M5 4L1 8l4 4M11 4l4 4-4 4M9 2l-2 12" },
+  link: { path: "M6.5 11.5l3-3M10 6a2.5 2.5 0 0 1 0 5H8M6 5a2.5 2.5 0 0 1 0 5h2" },
+  image: { path: "M2 3h12v10H2V3zm3 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm7 5l-3-4-2 2-2-1-3 3" },
+  file: { path: "M4 2h5l4 4v8H4V2zm5 0v4h4" },
+  music: { path: "M6 14a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm6-2a2 2 0 1 1 0-4 2 2 0 0 1 0 4zM6 12V4l6-2v8" },
+  video: { path: "M2 4h9v8H2V4zm9 2l3-2v8l-3-2" },
+  mail: { path: "M2 4h12v8H2V4zm0 0l6 4 6-4" },
+  home: { path: "M2 8l6-5 6 5v6H9V9H7v5H2V8z" },
+  work: { path: "M6 4V2h4v2h4v10H2V4h4zm0 0h4" },
+  circle: { path: "M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12Z", viewBox: "0 0 16 16" },
+  square: { path: "M3 3h10v10H3V3z" },
+  dot: { path: "M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" },
+};
+
+function PinboardIcon({ iconKey, size = 14 }: { iconKey: string; size?: number }) {
+  const icon = PINBOARD_ICONS[iconKey] || PINBOARD_ICONS.circle;
+  return (
+    <svg width={size} height={size} viewBox={icon.viewBox || "0 0 16 16"} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d={icon.path} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
 function App() {
   // Apply system accent color
   useSystemAccentColor();
 
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [query, setQuery] = useState("");
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [syncStatus, setSyncStatus] = useState<string>("");
 
@@ -65,12 +99,73 @@ function App() {
   const [permissions, setPermissions] = useState<PermissionsStatus | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState(false);
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: ClipboardItem } | null>(null);
-
   // Pinboard state
   const [pinboards, setPinboards] = useState<string[]>([]);
+  const [pinboardIcons, setPinboardIcons] = useState<Record<string, string>>({}); // pinboard name -> icon key
+  const [clipboardIcon, setClipboardIcon] = useState<string>("clock"); // icon key for Clipboard History
   const [activePinboard, setActivePinboard] = useState<string | null>(null); // null = Clipboard (recent history)
   const [saveToPinboardItem, setSaveToPinboardItem] = useState<ClipboardItem | null>(null);
+  const [showNewPinboardModal, setShowNewPinboardModal] = useState(false);
+  const [newPinboardName, setNewPinboardName] = useState("");
+  
+  // Pinboard context menu and edit state
+  const [editingPinboard, setEditingPinboard] = useState<string | null>(null); // pinboard being renamed
+  const [editingPinboardName, setEditingPinboardName] = useState("");
+  const [showIconPicker, setShowIconPicker] = useState<{ pinboard: string | null } | null>(null); // null = clipboard
+
+  // Show native context menu for pinboards
+  const showPinboardContextMenu = useCallback(async (e: React.MouseEvent, pinboard: string | null) => {
+    e.preventDefault();
+    
+    try {
+      const menuItems: (MenuItem | PredefinedMenuItem)[] = [];
+      
+      // Change Icon option (for both clipboard and pinboards)
+      const changeIconItem = await MenuItem.new({
+        text: "Change Icon...",
+        action: () => setShowIconPicker({ pinboard }),
+      });
+      menuItems.push(changeIconItem);
+
+      // Options only for custom pinboards (not clipboard)
+      if (pinboard !== null) {
+        const separator = await PredefinedMenuItem.new({ item: "Separator" });
+        menuItems.push(separator);
+
+        const renameItem = await MenuItem.new({
+          text: "Rename...",
+          action: () => {
+            setEditingPinboard(pinboard);
+            setEditingPinboardName(pinboard);
+          },
+        });
+        menuItems.push(renameItem);
+
+        const separator2 = await PredefinedMenuItem.new({ item: "Separator" });
+        menuItems.push(separator2);
+
+        const deleteItem = await MenuItem.new({
+          text: "Delete",
+          action: () => {
+            setPinboards((prev) => prev.filter((p) => p !== pinboard));
+            if (activePinboard === pinboard) {
+              setActivePinboard(null);
+            }
+            setPinboardIcons((prev) => {
+              const { [pinboard]: _, ...rest } = prev;
+              return rest;
+            });
+          },
+        });
+        menuItems.push(deleteItem);
+      }
+
+      const menu = await Menu.new({ items: menuItems });
+      await menu.popup(new LogicalPosition(e.clientX, e.clientY));
+    } catch (err) {
+      console.error("[powerpaste] Failed to show context menu:", err);
+    }
+  }, [activePinboard]);
 
   const lastSentOverlaySizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -192,10 +287,6 @@ function App() {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
   }, [selectedIds]);
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
 
   const togglePinned = useCallback(
     async (item: ClipboardItem) => {
@@ -405,32 +496,11 @@ function App() {
     void reload();
   }, [filteredQuery]);
 
-  // Close context menu when clicking elsewhere
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handleClick = () => closeContextMenu();
-    document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
-  }, [contextMenu, closeContextMenu]);
-
-  // Close context menu with Escape
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeContextMenu();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => document.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [contextMenu, closeContextMenu]);
-
-  // Disable browser's default context menu globally (we use custom context menu)
+  // Disable browser's default context menu on card elements (we use native Tauri menus)
   useEffect(() => {
     if (IS_SETTINGS_WINDOW) return;
     const handleContextMenu = (e: MouseEvent) => {
-      // Only prevent on card elements
+      // Only prevent on card elements - native menu will show instead
       const target = e.target as HTMLElement;
       if (target.closest(".trayCard")) {
         e.preventDefault();
@@ -793,16 +863,85 @@ function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="topbarPinboards" role="tablist" aria-label="Pinboards">
+        {/* All controls centered together */}
+        <div className="topbarCenter" role="tablist" aria-label="Pinboards">
+          {/* Search */}
+          {!searchExpanded ? (
+            <div
+              className="topbarIconBtn"
+              onClick={() => {
+                setSearchExpanded(true);
+                setTimeout(() => searchInputRef.current?.focus(), 50);
+              }}
+              role="button"
+              aria-label="Search"
+              tabIndex={0}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10ZM14 14l-3.5-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+          ) : (
+            <input
+              ref={searchInputRef}
+              className="searchInput"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              onKeyDownCapture={(e) => {
+                console.log("[powerpaste] search input keydown:", e.key, "meta:", e.metaKey);
+                
+                if (e.key === "Escape") {
+                  setQuery("");
+                  setSearchExpanded(false);
+                  searchInputRef.current?.blur();
+                  return;
+                }
+                
+                const isMod = e.metaKey || e.ctrlKey;
+                if (!isMod) return;
+
+                const key = e.key.toLowerCase();
+                if (key === "a") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  selectAll();
+                  return;
+                }
+                if (key === "c") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void copySelected();
+                }
+              }}
+              onBlur={() => {
+                if (!query.trim()) {
+                  setSearchExpanded(false);
+                }
+              }}
+              placeholder="Search..."
+            />
+          )}
+
+          {/* Clipboard History tab */}
           <button 
             className={`topbarPinboard${activePinboard === null ? " isActive" : ""}`}
             role="tab" 
             aria-selected={activePinboard === null}
             type="button"
             onClick={() => setActivePinboard(null)}
+            onContextMenu={(e) => void showPinboardContextMenu(e, null)}
           >
-            📋 Clipboard
+            <PinboardIcon iconKey={clipboardIcon} />
+            Clipboard History
           </button>
+
+          {/* Custom pinboards */}
           {pinboards.map((pb) => (
             <button
               key={pb}
@@ -811,76 +950,91 @@ function App() {
               aria-selected={activePinboard === pb}
               type="button"
               onClick={() => setActivePinboard(pb)}
+              onContextMenu={(e) => void showPinboardContextMenu(e, pb)}
             >
-              {pb}
+              <PinboardIcon iconKey={pinboardIcons[pb] || "dot"} />
+              {editingPinboard === pb ? (
+                <input
+                  className="pinboardRenameInput"
+                  value={editingPinboardName}
+                  onChange={(e) => setEditingPinboardName(e.target.value)}
+                  onBlur={() => {
+                    if (editingPinboardName.trim() && editingPinboardName !== pb) {
+                      // Rename pinboard
+                      setPinboards((prev) => prev.map((p) => p === pb ? editingPinboardName.trim() : p));
+                      // Move icon to new name
+                      if (pinboardIcons[pb]) {
+                        setPinboardIcons((prev) => {
+                          const { [pb]: icon, ...rest } = prev;
+                          return { ...rest, [editingPinboardName.trim()]: icon };
+                        });
+                      }
+                      if (activePinboard === pb) {
+                        setActivePinboard(editingPinboardName.trim());
+                      }
+                    }
+                    setEditingPinboard(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      (e.target as HTMLInputElement).blur();
+                    } else if (e.key === "Escape") {
+                      setEditingPinboard(null);
+                    }
+                  }}
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                pb
+              )}
             </button>
           ))}
-        </div>
 
-        <div className="topbarCenter">
-          <input
-            ref={searchInputRef}
-            className="search"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            onKeyDownCapture={(e) => {
-              console.log("[powerpaste] search input keydown:", e.key, "meta:", e.metaKey);
-              const isMod = e.metaKey || e.ctrlKey;
-              if (!isMod) return;
-
-              const key = e.key.toLowerCase();
-
-              if (key === "a") {
-                console.log("[powerpaste] search input Cmd+A - selecting all cards");
-                e.preventDefault();
-                e.stopPropagation();
-                selectAll();
-                return;
-              }
-
-              if (key === "c") {
-                console.log("[powerpaste] search input Cmd+C - copying selected");
-                e.preventDefault();
-                e.stopPropagation();
-                void copySelected();
-              }
-            }}
-            placeholder="Search..."
-            autoFocus
-          />
-          {syncStatus && <span className="topbarStatus">{syncStatus}</span>}
-        </div>
-
-        <div className="actions">
-          <button 
-            className="btnIcon" 
-            onClick={onSyncNow}
-            aria-label="Sync now"
-            title="Sync now"
-          >
-            ⟳
-          </button>
-          <button 
-            className="btnIcon" 
-            onClick={() => void openSettingsWindow()}
-            aria-label="Settings"
-            title="Settings"
-          >
-            ⚙️
-          </button>
-          <button
-            className="btnIcon"
-            type="button"
+          {/* Add pinboard button */}
+          <div
+            className="topbarIconBtn"
+            role="button"
+            aria-label="Add pinboard"
+            title="Add pinboard"
+            tabIndex={0}
             onClick={() => {
-              console.log("[powerpaste] Close button clicked: calling hideMainWindow");
-              void hideMainWindow().catch(() => undefined);
+              setNewPinboardName("");
+              setShowNewPinboardModal(true);
             }}
-            aria-label="Close"
-            title="Close"
           >
-            ✕
-          </button>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
         </div>
+
+        {/* More menu button */}
+        <div
+          className="topbarIconBtn topbarSettings"
+          role="button"
+          aria-label="More options"
+          title="More options"
+          tabIndex={0}
+          onClick={async (e) => {
+            const menuItems = [
+              await MenuItem.new({ text: "Settings...", action: () => void openSettingsWindow() }),
+              await PredefinedMenuItem.new({ item: "Separator" }),
+              await MenuItem.new({ text: "Close", action: () => void closeCurrentWindow() }),
+            ];
+            const menu = await Menu.new({ items: menuItems });
+            await menu.popup(new LogicalPosition(e.clientX, e.clientY));
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="3" cy="8" r="1.5" fill="currentColor"/>
+            <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+            <circle cx="13" cy="8" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+
+        {/* Status messages */}
+        {syncStatus && <span className="topbarStatus">{syncStatus}</span>}
       </header>
 
 
@@ -899,9 +1053,6 @@ function App() {
         onTogglePin={togglePinned}
         onSaveToPinboard={(item) => setSaveToPinboardItem(item)}
         onRemoveFromPinboard={handleRemoveFromPinboard}
-        contextMenu={contextMenu}
-        onContextMenu={(x, y, item) => setContextMenu({ x, y, item })}
-        onCloseContextMenu={closeContextMenu}
       />
 
       {/* Save to Pinboard Modal */}
@@ -914,6 +1065,85 @@ function App() {
           }}
           onCancel={() => setSaveToPinboardItem(null)}
         />
+      )}
+
+      {/* New Pinboard Modal */}
+      {showNewPinboardModal && (
+        <div className="modalBackdrop" onClick={() => setShowNewPinboardModal(false)}>
+          <div className="modal newPinboardModal" onClick={(e) => e.stopPropagation()}>
+            <h3>New Pinboard</h3>
+            <input
+              className="input"
+              type="text"
+              value={newPinboardName}
+              onChange={(e) => setNewPinboardName(e.target.value)}
+              placeholder="Pinboard name"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newPinboardName.trim()) {
+                  setPinboards((prev) => [...prev, newPinboardName.trim()]);
+                  setShowNewPinboardModal(false);
+                } else if (e.key === "Escape") {
+                  setShowNewPinboardModal(false);
+                }
+              }}
+            />
+            <div className="modalActions">
+              <button className="btn" onClick={() => setShowNewPinboardModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btnPrimary"
+                onClick={() => {
+                  if (newPinboardName.trim()) {
+                    setPinboards((prev) => [...prev, newPinboardName.trim()]);
+                    setShowNewPinboardModal(false);
+                  }
+                }}
+                disabled={!newPinboardName.trim()}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Icon Picker Modal */}
+      {showIconPicker && (
+        <div className="modalBackdrop" onClick={() => setShowIconPicker(null)}>
+          <div className="modal iconPickerModal" onClick={(e) => e.stopPropagation()}>
+            <h3>Choose Icon</h3>
+            <div className="iconGrid">
+              {Object.keys(PINBOARD_ICONS).map((key) => (
+                <button
+                  key={key}
+                  className={`iconOption${
+                    (showIconPicker.pinboard === null ? clipboardIcon : pinboardIcons[showIconPicker.pinboard] || "dot") === key
+                      ? " isSelected"
+                      : ""
+                  }`}
+                  onClick={() => {
+                    if (showIconPicker.pinboard === null) {
+                      setClipboardIcon(key);
+                    } else {
+                      setPinboardIcons((prev) => ({ ...prev, [showIconPicker.pinboard!]: key }));
+                    }
+                    setShowIconPicker(null);
+                  }}
+                  title={key}
+                >
+                  <PinboardIcon iconKey={key} size={18} />
+                </button>
+              ))}
+            </div>
+            <div className="modalActions">
+              <button className="btn" onClick={() => setShowIconPicker(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showPermissions ? (
