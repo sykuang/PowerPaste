@@ -26,7 +26,7 @@ vi.mock("./api", () => {
       sync_folder: null,
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
-      theme: "glass",
+      theme: "system",
     })),
     listItems: vi.fn(async () => [
       {
@@ -46,6 +46,7 @@ vi.mock("./api", () => {
         pin_category: null,
       },
     ]),
+    listPinboards: vi.fn(async () => []),
     listCategories: vi.fn(async () => []),
     setItemCategory: vi.fn(async () => undefined),
     setHotkey: vi.fn(async () => ({
@@ -55,7 +56,7 @@ vi.mock("./api", () => {
       sync_folder: null,
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
-      theme: "glass",
+      theme: "system",
     })),
     setSyncSettings: vi.fn(async () => ({
       device_id: "test-device",
@@ -64,7 +65,7 @@ vi.mock("./api", () => {
       sync_folder: null,
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
-      theme: "glass",
+      theme: "system",
     })),
     setItemPinned: vi.fn(async () => undefined),
     deleteItem: vi.fn(async () => undefined),

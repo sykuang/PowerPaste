@@ -14,6 +14,33 @@ use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use uuid::Uuid;
 
+// tauri-nspanel imports for macOS panel support
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{
+    tauri_panel, CollectionBehavior, ManagerExt as NspanelManagerExt, Panel as NspanelPanel,
+    PanelLevel, StyleMask, WebviewWindowExt as NspanelWebviewWindowExt,
+};
+
+// Define the PowerPaste panel with tauri-nspanel
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(PowerPastePanel {
+        config: {
+            // Allow the panel to receive keyboard input (essential for search)
+            can_become_key_window: true,
+            // Don't make it the main window (we're a utility panel)
+            can_become_main_window: false,
+            // Floating panel stays above other windows
+            is_floating_panel: true
+        }
+    })
+
+    panel_event!(PowerPastePanelEventHandler {
+        window_did_become_key(notification: &NSNotification) -> (),
+        window_did_resign_key(notification: &NSNotification) -> ()
+    })
+}
+
 #[cfg(desktop)]
 fn debug_log_path() -> Option<std::path::PathBuf> {
     // A stable location users can find even when launching from Finder.
@@ -46,13 +73,9 @@ fn append_debug_log(line: &str) {
 }
 
 // Overlay sizing: computed from the active monitor each time we show the window.
-// These constants act as clamps so the UI stays usable across tiny/huge screens.
-const OVERLAY_WIDTH_FRACTION: f64 = 0.62;
-const OVERLAY_HEIGHT_FRACTION: f64 = 0.22;
-const OVERLAY_MIN_WIDTH_PX: u32 = 820;
-const OVERLAY_MAX_WIDTH_PX: u32 = 1200;
-const OVERLAY_MIN_HEIGHT_PX: u32 = 230;
-const OVERLAY_MAX_HEIGHT_PX: u32 = 270;
+// Uses screen fractions for responsive sizing across all display sizes.
+const OVERLAY_WIDTH_FRACTION: f64 = 0.99;
+const OVERLAY_HEIGHT_FRACTION: f64 = 0.23;
 
 // Preferred overlay size, optionally set by the frontend at runtime.
 static OVERLAY_PREFERRED_SIZE: OnceLock<Mutex<Option<(u32, u32)>>> = OnceLock::new();
@@ -63,6 +86,7 @@ fn set_overlay_preferred_size_global(w: u32, h: u32) {
     *guard = Some((w, h));
 }
 
+#[allow(dead_code)]
 fn get_overlay_preferred_size_global() -> Option<(u32, u32)> {
     let cell = OVERLAY_PREFERRED_SIZE.get_or_init(|| Mutex::new(None));
     let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -70,26 +94,10 @@ fn get_overlay_preferred_size_global() -> Option<(u32, u32)> {
 }
 
 fn overlay_size_for_monitor(monitor_width: u32, monitor_height: u32) -> (u32, u32) {
-    if let Some((pref_w, pref_h)) = get_overlay_preferred_size_global() {
-        // Clamp preferred size to reasonable bounds and the current monitor.
-        let width = pref_w
-            .max(OVERLAY_MIN_WIDTH_PX)
-            .min(OVERLAY_MAX_WIDTH_PX)
-            .min(monitor_width);
-        let height = pref_h
-            .max(OVERLAY_MIN_HEIGHT_PX)
-            .min(OVERLAY_MAX_HEIGHT_PX)
-            .min(monitor_height);
-        return (width, height);
-    }
-
-    let mut width = ((monitor_width as f64) * OVERLAY_WIDTH_FRACTION).round() as u32;
-    let mut height = ((monitor_height as f64) * OVERLAY_HEIGHT_FRACTION).round() as u32;
-
-    width = width.clamp(OVERLAY_MIN_WIDTH_PX, OVERLAY_MAX_WIDTH_PX).min(monitor_width);
-    height = height
-        .clamp(OVERLAY_MIN_HEIGHT_PX, OVERLAY_MAX_HEIGHT_PX)
-        .min(monitor_height);
+    // Always use screen fractions - ignore any cached preferred size from frontend
+    // This ensures consistent sizing across app restarts
+    let width = ((monitor_width as f64) * OVERLAY_WIDTH_FRACTION).round() as u32;
+    let height = ((monitor_height as f64) * OVERLAY_HEIGHT_FRACTION).round() as u32;
 
     (width, height)
 }
@@ -116,6 +124,11 @@ static CLICK_OUTSIDE_MONITOR_PTR: OnceLock<Mutex<Option<usize>>> = OnceLock::new
 static PANEL_INIT_RETRY_SCHEDULED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Explicit panel visibility state to avoid race conditions with window.is_visible().
+/// Used by toggle logic to track whether the panel should be shown or hidden.
+static IS_PANEL_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Generation counter to detect stale hide requests.
 /// Incremented each time the panel is shown. Hide requests check this to avoid
 /// hiding a panel that was shown after the hide was requested.
@@ -140,6 +153,7 @@ fn macos_set_last_frontmost_app_name(name: String) {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_get_last_frontmost_app_name() -> Option<String> {
     let cell = LAST_FRONTMOST_APP_NAME.get_or_init(|| Mutex::new(None));
     let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -177,6 +191,7 @@ fn macos_get_cursor_position() -> Option<(f64, f64)> {
 
 /// Find the screen that contains the mouse cursor.
 #[cfg(target_os = "macos")]
+#[allow(dead_code, deprecated)]
 fn macos_screen_containing_cursor(mtm: objc2::MainThreadMarker) -> Option<objc2::rc::Retained<objc2_app_kit::NSScreen>> {
     use objc2_app_kit::NSScreen;
     
@@ -210,6 +225,7 @@ fn macos_install_keyboard_monitor<R: tauri::Runtime>(_app_handle: tauri::AppHand
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_install_keyboard_monitor_real<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
     use block2::StackBlock;
     use objc2::rc::Retained;
@@ -312,15 +328,114 @@ fn macos_remove_keyboard_monitor() {
 /// views on first click, so we need to manually make the content view first responder.
 #[cfg(target_os = "macos")]
 fn macos_install_mouse_focus_monitor() {
-    // Disabled - was causing issues with click handling
-    // The JS-level workarounds should handle focus instead
-    eprintln!("[powerpaste] mouse focus monitor disabled (using JS workaround)");
+    use block2::StackBlock;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSPanel};
+    use std::ptr::NonNull;
+
+    // Check if already installed
+    let cell = MOUSE_FOCUS_MONITOR_PTR.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return; // Already installed
+    }
+
+    eprintln!("[powerpaste] installing mouse focus monitor");
+
+    // Create a block that handles local mouse click events
+    let handler = StackBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // Check if we have a panel
+        let Some(stored) = OVERLAY_PANEL_PTR.get() else {
+            return event.as_ptr();
+        };
+        
+        // SAFETY: We store a valid NSPanel pointer
+        let panel: Retained<NSPanel> = match unsafe {
+            Retained::retain((*stored as *mut NSPanel).cast())
+        } {
+            Some(p) => p,
+            None => return event.as_ptr(),
+        };
+        
+        if !panel.isVisible() {
+            return event.as_ptr();
+        }
+        
+        // Make the panel key window and ensure webview has focus
+        panel.makeKeyWindow();
+        
+        // Find and focus the WryWebView
+        if let Some(content_view) = panel.contentView() {
+            use objc2::runtime::AnyObject;
+            fn find_wry_webview(view: *mut AnyObject, depth: usize) -> Option<*mut AnyObject> {
+                if view.is_null() || depth > 10 { return None; }
+                unsafe {
+                    let class_name: *const AnyObject = objc2::msg_send![view, className];
+                    if !class_name.is_null() {
+                        let class_str: *const std::ffi::c_char = objc2::msg_send![class_name, UTF8String];
+                        if !class_str.is_null() {
+                            let name = std::ffi::CStr::from_ptr(class_str).to_string_lossy();
+                            if name == "WryWebView" || name == "WKWebView" {
+                                return Some(view);
+                            }
+                        }
+                    }
+                    let subviews: *const AnyObject = objc2::msg_send![view, subviews];
+                    if !subviews.is_null() {
+                        let count: usize = objc2::msg_send![subviews, count];
+                        for i in 0..count {
+                            let subview: *mut AnyObject = objc2::msg_send![subviews, objectAtIndex: i];
+                            if let Some(wv) = find_wry_webview(subview, depth + 1) { return Some(wv); }
+                        }
+                    }
+                    None
+                }
+            }
+            let cv_ptr = &*content_view as *const _ as *mut AnyObject;
+            if let Some(webview) = find_wry_webview(cv_ptr, 0) {
+                unsafe {
+                    let wv_view: *const AnyObject = webview as *const AnyObject;
+                    let _: bool = objc2::msg_send![&*panel, makeFirstResponder: wv_view];
+                }
+            }
+        }
+        
+        // Pass the event through
+        event.as_ptr()
+    });
+
+    // Install the monitor for left mouse down events (local = inside our app)
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+            NSEventMask::LeftMouseDown,
+            &handler,
+        )
+    };
+    
+    if let Some(m) = monitor {
+        let ptr = Retained::into_raw(m) as usize;
+        *guard = Some(ptr);
+        eprintln!("[powerpaste] mouse focus monitor installed successfully");
+    } else {
+        eprintln!("[powerpaste] failed to install mouse focus monitor");
+    }
 }
 
 /// Remove the local mouse focus monitor when panel is hidden.
 #[cfg(target_os = "macos")]
 fn macos_remove_mouse_focus_monitor() {
-    // No-op since monitor is disabled
+    use objc2_app_kit::NSEvent;
+
+    let cell = MOUSE_FOCUS_MONITOR_PTR.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    
+    if let Some(ptr) = guard.take() {
+        eprintln!("[powerpaste] removing mouse focus monitor");
+        unsafe {
+            let monitor: *mut objc2::runtime::AnyObject = ptr as *mut _;
+            NSEvent::removeMonitor(&*monitor);
+        }
+    }
 }
 
 /// Install a global mouse click monitor to detect clicks outside the panel.
@@ -455,6 +570,14 @@ fn get_current_ui_mode() -> models::UiMode {
     *guard
 }
 
+/// Get the system accent color as a hex string.
+/// Returns a default blue (#2563EB) for now.
+/// TODO: Implement actual macOS accent color detection once NSColor is safe to use.
+#[tauri::command]
+fn get_system_accent_color() -> String {
+    "#2563EB".to_string()
+}
+
 struct AppState {
     watcher: Mutex<Option<clipboard::ClipboardWatcher>>,
 }
@@ -560,6 +683,10 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     static HIDE_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
     let call_id = HIDE_CALL_COUNTER.fetch_add(1, Ordering::SeqCst);
     eprintln!("[powerpaste] hide_main_window COMMAND #{} called from frontend", call_id);
+    
+    // Update atomic visibility flag
+    IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+    
     #[cfg(target_os = "macos")]
     {
         use std::sync::atomic::Ordering as AtomicOrdering;
@@ -594,37 +721,18 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn macos_hide_overlay_panel_if_visible<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
-    use objc2::exception;
-    use objc2::rc::Retained;
-    use objc2_app_kit::NSPanel;
-
+    use std::sync::atomic::Ordering;
+    
     eprintln!("[powerpaste] macos_hide_overlay_panel_if_visible called");
     #[cfg(desktop)]
     append_debug_log("[powerpaste] macos_hide_overlay_panel_if_visible called");
 
-    if let Some(stored) = OVERLAY_PANEL_PTR.get() {
-        // SAFETY: We store a leaked, valid NSPanel pointer (as usize). We only use it on main thread.
-        let panel: Retained<NSPanel> = unsafe {
-            Retained::retain((*stored as *mut NSPanel).cast()).ok_or("failed to retain NSPanel")?
-        };
-        if panel.isVisible() {
-            eprintln!("[powerpaste] panel is visible, hiding it now");
-            exception::catch(std::panic::AssertUnwindSafe(|| {
-                panel.orderOut(None);
-            }))
-            .map_err(|e| format!("objective-c exception hiding panel: {e:?}"))?;
-            
-            // Remove monitors when hiding
-            macos_remove_keyboard_monitor();
-            macos_remove_click_outside_monitor();
-            macos_remove_mouse_focus_monitor();
-            
-            return Ok(());
-        } else {
-            eprintln!("[powerpaste] panel exists but is not visible, skipping hide");
-        }
-    } else {
-        eprintln!("[powerpaste] no panel exists yet");
+    // Try to hide the tauri-nspanel first
+    if let Ok(panel) = app.get_webview_panel("main") {
+        eprintln!("[powerpaste] hiding tauri-nspanel");
+        IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+        panel.hide();
+        return Ok(());
     }
 
     // Fallback: if the panel isn't initialized yet, hide the main window.
@@ -658,6 +766,10 @@ fn set_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<Settings, String>
     let settings = settings_store::load_or_init_settings(&app)?;
     let settings = settings_store::set_hotkey(&app, settings, hotkey)?;
     register_hotkey(&app, &settings.hotkey)?;
+    
+    // Emit settings_changed event so all windows update immediately
+    let _ = app.emit("settings_changed", &settings);
+    
     Ok(settings)
 }
 
@@ -689,10 +801,15 @@ fn set_sync_settings(
     }
 
     let settings = settings_store::set_sync_config(&app, settings, enabled, provider, folder)?;
-    if settings.sync_enabled {
-        let settings = settings_store::ensure_sync_salt_b64(&app, settings)?;
-        return Ok(settings);
-    }
+    let settings = if settings.sync_enabled {
+        settings_store::ensure_sync_salt_b64(&app, settings)?
+    } else {
+        settings
+    };
+    
+    // Emit settings_changed event so all windows (main overlay, settings modal) update immediately
+    let _ = app.emit("settings_changed", &settings);
+    
     Ok(settings)
 }
 
@@ -701,6 +818,10 @@ fn set_ui_mode(app: tauri::AppHandle, ui_mode: models::UiMode) -> Result<Setting
     let settings = settings_store::load_or_init_settings(&app)?;
     let settings = settings_store::set_ui_mode(&app, settings, ui_mode)?;
     set_current_ui_mode(ui_mode);
+    
+    // Emit settings_changed event so all windows update immediately
+    let _ = app.emit("settings_changed", &settings);
+    
     Ok(settings)
 }
 
@@ -746,16 +867,16 @@ fn set_item_pinned(app: tauri::AppHandle, id: String, pinned: bool) -> Result<()
 }
 
 #[tauri::command]
-fn set_item_category(app: tauri::AppHandle, id: String, category: Option<String>) -> Result<(), String> {
+fn set_item_pinboard(app: tauri::AppHandle, id: String, pinboard: Option<String>) -> Result<(), String> {
     let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
     // Normalize: empty string becomes None
-    let category = category.filter(|s| !s.trim().is_empty());
-    db::set_pin_category(&app, id, category)
+    let pinboard = pinboard.filter(|s| !s.trim().is_empty());
+    db::set_pinboard(&app, id, pinboard)
 }
 
 #[tauri::command]
-fn list_categories(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    db::list_categories(&app)
+fn list_pinboards(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    db::list_pinboards(&app)
 }
 
 #[tauri::command]
@@ -811,7 +932,7 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
         let _ = app.run_on_main_thread(move || {
             use objc2::rc::Retained;
             use objc2::exception;
-            use objc2_app_kit::{NSPanel, NSApplication, NSApplicationActivationPolicy};
+            use objc2_app_kit::{NSPanel, NSApplication};
             use objc2::MainThreadMarker;
             
             eprintln!("[powerpaste] paste_text: on main thread, hiding panel...");
@@ -837,7 +958,7 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
             if let Some(mtm) = MainThreadMarker::new() {
                 let ns_app = NSApplication::sharedApplication(mtm);
                 eprintln!("[powerpaste] paste_text: hiding NSApplication");
-                unsafe { ns_app.hide(None) };
+                ns_app.hide(None);
             }
             
             hidden_clone.store(true, Ordering::SeqCst);
@@ -1030,8 +1151,17 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
                     let app_handle_for_task = app_handle.clone();
                     let _ = app_handle.run_on_main_thread(move || {
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            if let Err(e) = toggle_main_window(&app_handle_for_task) {
-                                eprintln!("[powerpaste] hotkey toggle failed: {e}");
+                            #[cfg(target_os = "macos")]
+                            {
+                                if let Err(e) = toggle_main_window_wry(&app_handle_for_task) {
+                                    eprintln!("[powerpaste] hotkey toggle failed: {e}");
+                                }
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                if let Err(e) = toggle_main_window(&app_handle_for_task) {
+                                    eprintln!("[powerpaste] hotkey toggle failed: {e}");
+                                }
                             }
                         }));
                     });
@@ -1048,23 +1178,29 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Toggle using standard Tauri window (for debugging keyboard input issues)
+/// Toggle using standard Tauri window (fallback for debugging keyboard input issues)
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn toggle_standard_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{NSApplication, NSScreen, NSWindow};
     use objc2_foundation::NSRect;
+    use std::sync::atomic::Ordering;
     
-    let visible = window.is_visible().unwrap_or(false);
-    let minimized = window.is_minimized().unwrap_or(false);
+    // Use atomic flag instead of window.is_visible() to avoid race conditions
+    // on first toggle when the window hasn't been realized yet
+    let is_visible = IS_PANEL_VISIBLE.load(Ordering::SeqCst);
     
-    eprintln!("[powerpaste] toggle_standard_window: visible={} minimized={}", visible, minimized);
+    eprintln!("[powerpaste] toggle_standard_window: is_visible={}", is_visible);
     
-    if visible && !minimized {
+    if is_visible {
+        IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
         window.hide().map_err(|e| format!("failed to hide: {e}"))?;
         eprintln!("[powerpaste] standard window hidden");
     } else {
+        IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
+        
         // Get ns_window and configure it
         let ptr = window.ns_window().map_err(|e| format!("ns_window error: {e}"))?;
         let ns_window: Retained<NSWindow> = unsafe {
@@ -1080,21 +1216,20 @@ fn toggle_standard_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -
             // Calculate proper size and position like NSPanel code
             if let Some(screen) = NSScreen::mainScreen(mtm) {
                 let screen_frame: NSRect = screen.frame();
-                let visible_frame: NSRect = screen.visibleFrame();
                 let (w, h) = overlay_size_for_monitor(
                     screen_frame.size.width.max(1.0).round() as u32,
                     screen_frame.size.height.max(1.0).round() as u32,
                 );
                 
-                // Position at bottom center
-                // Tauri uses top-left origin, but NSScreen uses bottom-left origin
-                // So we need to convert: tauri_y = screen_height - ns_y - window_height
+                // Position at bottom center of screen
+                // Tauri uses top-left origin where y=0 is top
+                // We want the window touching the bottom edge
                 let x = (screen_frame.size.width - w as f64) / 2.0;
-                // For bottom of screen: ns_y = 0, so tauri_y = screen_height - h
                 let y = screen_frame.size.height - h as f64;
                 
-                let _ = window.set_size(tauri::LogicalSize::new(w, h));
-                let _ = window.set_position(tauri::LogicalPosition::new(x as i32, y as i32));
+                // Set size and position BEFORE showing
+                window.set_size(tauri::LogicalSize::new(w, h)).ok();
+                window.set_position(tauri::LogicalPosition::new(x as i32, y as i32)).ok();
                 
                 eprintln!("[powerpaste] standard window resized to {}x{} at ({}, {})", w, h, x, y);
             }
@@ -1126,13 +1261,9 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<()
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
 
-    // TEMPORARILY: Skip NSPanel and use standard window to debug keyboard input issue
-    // macOS fullscreen Spaces: a normal NSWindow often can't overlay another app's
-    // fullscreen space, even at very high window levels. We use a native NSPanel
-    // overlay instead.
     #[cfg(target_os = "macos")]
     {
-        // Use standard window approach for now
+        // Use standard window for now, toggle_nspanel_overlay is available for Wry runtime
         return toggle_standard_window(&window);
     }
 
@@ -1161,6 +1292,151 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<()
             .map_err(|e| format!("failed to focus window: {e}"))?;
         Ok(())
     }
+}
+
+/// Toggle using tauri-nspanel. This is the main entry point for Wry runtime.
+#[cfg(target_os = "macos")]
+fn toggle_main_window_wry(app: &tauri::AppHandle) -> Result<(), String> {
+    // Load UI mode from settings before toggling
+    if let Ok(settings) = settings_store::get(app) {
+        set_current_ui_mode(settings.ui_mode);
+    }
+    
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+
+    toggle_nspanel_overlay(app, &window)
+}
+
+/// Toggle the NSPanel overlay using tauri-nspanel library.
+/// This properly handles keyboard focus/input that was broken with raw NSPanel code.
+/// Note: This function works only with the Wry runtime since that's what PowerPastePanel implements.
+#[cfg(target_os = "macos")]
+fn toggle_nspanel_overlay(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSScreen};
+    use objc2_foundation::NSRect;
+    use std::sync::atomic::Ordering;
+
+    let mtm = MainThreadMarker::new().ok_or("not on main thread")?;
+
+    // Check if panel already exists
+    let panel = match app.get_webview_panel("main") {
+        Ok(p) => p,
+        Err(_) => {
+            // First time: convert window to panel
+            eprintln!("[powerpaste] converting window to panel with tauri-nspanel");
+            
+            let panel = window
+                .to_panel::<PowerPastePanel>()
+                .map_err(|e| format!("failed to convert window to panel: {e}"))?;
+            
+            // Configure panel
+            panel.set_level(PanelLevel::Floating.value());
+            panel.set_hides_on_deactivate(false);
+            panel.set_works_when_modal(true);
+            
+            // Set style mask for non-activating panel that can still receive input
+            panel.set_style_mask(
+                StyleMask::empty()
+                    .nonactivating_panel()
+                    .resizable()
+                    .into(),
+            );
+            
+            // Configure collection behavior for fullscreen support
+            panel.set_collection_behavior(
+                CollectionBehavior::new()
+                    .full_screen_auxiliary()
+                    .can_join_all_spaces()
+                    .into(),
+            );
+            
+            // Set up event handlers
+            let handler = PowerPastePanelEventHandler::new();
+            
+            let app_handle = app.clone();
+            handler.window_did_become_key(move |_notification| {
+                eprintln!("[powerpaste] panel became key window");
+                if let Some(w) = app_handle.get_webview_window("main") {
+                    let _ = w.emit(FRONTEND_EVENT_PANEL_SHOWN, ());
+                }
+            });
+            
+            let app_handle2 = app.clone();
+            handler.window_did_resign_key(move |_notification| {
+                eprintln!("[powerpaste] panel resigned key window - hiding");
+                IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+                // Hide the panel when it loses focus
+                if let Ok(p) = app_handle2.get_webview_panel("main") {
+                    p.hide();
+                }
+            });
+            
+            panel.set_event_handler(Some(handler.as_ref()));
+            
+            eprintln!("[powerpaste] panel configured successfully");
+            panel
+        }
+    };
+
+    // Toggle visibility using atomic flag
+    let was_visible = IS_PANEL_VISIBLE.load(Ordering::SeqCst);
+    
+    if was_visible {
+        eprintln!("[powerpaste] hiding nspanel overlay");
+        IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+        panel.hide();
+    } else {
+        eprintln!("[powerpaste] showing nspanel overlay");
+        
+        // Remember frontmost app before showing
+        if let Some(name) = macos_query_frontmost_app_name() {
+            macos_set_last_frontmost_app_name(name.clone());
+            eprintln!("[powerpaste] saved frontmost app: {}", name);
+        }
+        
+        // Position and size the panel
+        if let Some(screen) = NSScreen::mainScreen(mtm) {
+            let screen_frame: NSRect = screen.frame();
+            let (w, h) = overlay_size_for_monitor(
+                screen_frame.size.width.max(1.0).round() as u32,
+                screen_frame.size.height.max(1.0).round() as u32,
+            );
+            
+            // Position at bottom center of screen
+            let x = (screen_frame.size.width - w as f64) / 2.0;
+            // For NSPanel, y=0 is bottom of screen, so position at y = small offset from bottom
+            let y = 10.0; // Small offset from bottom edge
+            
+            // Set size and position on the underlying window
+            if let Some(tauri_window) = panel.to_window() {
+                tauri_window.set_size(tauri::LogicalSize::new(w, h)).ok();
+                // Tauri uses screen coordinates where y=0 is top
+                let tauri_y = screen_frame.size.height - h as f64 - y;
+                tauri_window.set_position(tauri::LogicalPosition::new(x as i32, tauri_y as i32)).ok();
+                eprintln!("[powerpaste] panel sized to {}x{} at ({}, {})", w, h, x, tauri_y);
+            }
+        }
+        
+        // Activate app
+        let ns_app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        ns_app.activateIgnoringOtherApps(true);
+        
+        // Show and make key
+        IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
+        panel.show_and_make_key();
+        
+        // Emit panel shown event
+        let _ = window.emit(FRONTEND_EVENT_PANEL_SHOWN, ());
+    }
+    
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1213,6 +1489,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
         let is_visible = panel.isVisible();
         if is_visible {
+            IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
             exception::catch(std::panic::AssertUnwindSafe(|| {
                 panel.orderOut(None);
             }))
@@ -1232,6 +1509,9 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             return Ok(());
         }
 
+        // Mark as visible before showing
+        IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
+
         // Snapshot the current frontmost app before we activate ourselves.
         // This lets us restore focus when the user chooses an item to paste.
         // Skip dev tools that shouldn't be paste targets.
@@ -1250,8 +1530,9 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         }
 
         // Show: activate app (helps on some systems), then order front.
+        // Use Regular policy temporarily to ensure we can receive keyboard input
         let app = NSApplication::sharedApplication(mtm);
-        let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
 
@@ -1594,14 +1875,16 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     panel.setAcceptsMouseMovedEvents(true);
     panel.setFloatingPanel(true);
     panel.setBecomesKeyOnlyIfNeeded(false);
+    panel.setWorksWhenModal(true);
 
     // Keep a retained pointer around for future toggles.
     let raw = Retained::as_ptr(&panel) as usize;
     let _ = OVERLAY_PANEL_PTR.set(raw);
 
     // First show.
+    // Use Regular policy temporarily to ensure we can receive keyboard input
     let app = NSApplication::sharedApplication(mtm);
-    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     // Snapshot the current frontmost app (skip dev tools)
     eprintln!("[powerpaste] (first show) querying frontmost app...");
     if let Some(name) = macos_query_frontmost_app_name() {
@@ -1913,7 +2196,65 @@ fn macos_set_overlay_window_active<R: tauri::Runtime>(
     Ok(())
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, target_os = "macos"))]
+fn setup_tray(app: &tauri::App) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri::Manager;
+
+    let toggle_item = MenuItem::with_id(app, "tray_toggle", "Show/Hide", true, None::<String>)
+        .map_err(|e| format!("failed to create tray menu item: {e}"))?;
+    let quit_item = MenuItem::with_id(app, "tray_quit", "Exit", true, None::<String>)
+        .map_err(|e| format!("failed to create tray menu item: {e}"))?;
+    let sep = PredefinedMenuItem::separator(app)
+        .map_err(|e| format!("failed to create tray menu separator: {e}"))?;
+
+    let menu = Menu::with_items(app, &[&toggle_item, &sep, &quit_item])
+        .map_err(|e| format!("failed to create tray menu: {e}"))?;
+
+    let mut builder = TrayIconBuilder::with_id("powerpaste_tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray_toggle" => {
+                let _ = toggle_main_window_wry(app);
+            }
+            "tray_quit" => {
+                let state: tauri::State<'_, AppState> = app.state();
+                if let Ok(guard) = state.watcher.lock() {
+                    if let Some(watcher) = guard.as_ref() {
+                        watcher.stop();
+                    }
+                }
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Err(e) = toggle_main_window_wry(tray.app_handle()) {
+                    eprintln!("[powerpaste] tray toggle failed: {e}");
+                }
+            }
+        })
+        .tooltip("PowerPaste");
+
+    if let Some(icon) = app.app_handle().default_window_icon() {
+        builder = builder.icon(icon.clone()).icon_as_template(true);
+    }
+
+    builder
+        .build(app)
+        .map_err(|e| format!("failed to build tray icon: {e}"))?;
+    Ok(())
+}
+
+#[cfg(all(desktop, not(target_os = "macos")))]
 fn setup_tray<R: tauri::Runtime, M: tauri::Manager<R>>(manager: &M) -> Result<(), String> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -2069,10 +2410,18 @@ fn debug_log_menu_event_id(id: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .manage(AppState {
             watcher: Mutex::new(None),
-        })
+        });
+    
+    // Register tauri-nspanel plugin for macOS panel support
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+    
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -2115,8 +2464,14 @@ pub fn run() {
             }
 
             // Start hidden; the global hotkey toggles the UI.
+            // Pre-realize the window by briefly showing then hiding it.
+            // This ensures the webview is fully initialized before the first toggle,
+            // preventing the "first toggle doesn't show" issue.
             if let Some(window) = app.get_webview_window("main") {
+                // Pre-realize: show briefly then hide to initialize the webview
+                let _ = window.show();
                 let _ = window.hide();
+                eprintln!("[powerpaste] window pre-realized (show/hide cycle)");
 
                 // Open DevTools if POWERPASTE_DEVTOOLS_PORT is set (for E2E testing with Playwright).
                 // The port value itself is currently not used by Tauri's WebView, but this env var
@@ -2167,6 +2522,8 @@ pub fn run() {
                                     eprintln!("[powerpaste] macos overlay deactivate failed: {e}");
                                 }
                             }
+                            // Update atomic flag when window loses focus and hides
+                            IS_PANEL_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
                             let _ = window_for_event.hide();
                         }
                         _ => {}
@@ -2238,8 +2595,8 @@ pub fn run() {
             set_overlay_preferred_size,
             hide_main_window,
             set_item_pinned,
-            set_item_category,
-            list_categories,
+            set_item_pinboard,
+            list_pinboards,
             delete_item,
             enable_mouse_events,
             write_clipboard_text,
@@ -2248,7 +2605,8 @@ pub fn run() {
             open_accessibility_settings,
             open_automation_settings,
             sync_now,
-            set_show_dock_icon
+            set_show_dock_icon,
+            get_system_accent_color
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

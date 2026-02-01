@@ -4,16 +4,16 @@ import { ClipboardItem } from "../api";
 interface BottomTrayProps {
   items: ClipboardItem[];
   selectedIds: Set<string>;
-  categories: string[];
-  activeTab: string | null; // null = Clipboard
-  onTabChange: (tab: string | null) => void;
+  pinboards: string[];
+  activePinboard: string | null; // null = Clipboard
+  onPinboardChange: (pinboard: string | null) => void;
   onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
   onCopy: (item: ClipboardItem) => void;
   onPaste: (item: ClipboardItem) => void;
   onDelete: (item: ClipboardItem) => void;
   onTogglePin: (item: ClipboardItem) => void;
-  onSaveToTab: (item: ClipboardItem) => void;
-  onRemoveFromTab: (item: ClipboardItem) => void;
+  onSaveToPinboard: (item: ClipboardItem) => void;
+  onRemoveFromPinboard: (item: ClipboardItem) => void;
   contextMenu: { x: number; y: number; item: ClipboardItem } | null;
   onContextMenu: (x: number, y: number, item: ClipboardItem) => void;
   onCloseContextMenu: () => void;
@@ -182,26 +182,26 @@ export function BottomTray(props: BottomTrayProps) {
             Paste
           </button>
           
-          {/* Show different actions based on whether item is in a category */}
-          {props.contextMenu.item.pin_category ? (
+          {/* Show different actions based on whether item is in a pinboard */}
+          {props.contextMenu.item.pinboard ? (
             <button
               className="contextMenuItem"
               onClick={() => {
-                props.onRemoveFromTab(props.contextMenu!.item);
+                props.onRemoveFromPinboard(props.contextMenu!.item);
                 props.onCloseContextMenu();
               }}
             >
-              Remove from tab
+              Remove from pinboard
             </button>
           ) : (
             <button
               className="contextMenuItem"
               onClick={() => {
-                props.onSaveToTab(props.contextMenu!.item);
+                props.onSaveToPinboard(props.contextMenu!.item);
                 props.onCloseContextMenu();
               }}
             >
-              Save to tab...
+              Save to pinboard...
             </button>
           )}
           

@@ -6,7 +6,7 @@ export type SyncProvider =
   | "google_drive"
   | "custom_folder";
 
-export type Theme = "glass" | "midnight" | "aurora";
+export type Theme = "light" | "dark" | "system";
 
 export type UiMode = "floating" | "fixed";
 
@@ -29,8 +29,8 @@ export type ClipboardItem = {
   text: string;
   created_at_ms: number;
   pinned: boolean;
-  /** Optional category name for user-created tabs */
-  pin_category: string | null;
+  /** Optional pinboard name for user-created pinboards */
+  pinboard: string | null;
 };
 
 export type PermissionsStatus = {
@@ -83,12 +83,12 @@ export async function setItemPinned(id: string, pinned: boolean): Promise<void> 
   return invoke("set_item_pinned", { id, pinned });
 }
 
-export async function setItemCategory(id: string, category: string | null): Promise<void> {
-  return invoke("set_item_category", { id, category });
+export async function setItemPinboard(id: string, pinboard: string | null): Promise<void> {
+  return invoke("set_item_pinboard", { id, pinboard });
 }
 
-export async function listCategories(): Promise<string[]> {
-  return invoke("list_categories");
+export async function listPinboards(): Promise<string[]> {
+  return invoke("list_pinboards");
 }
 
 export async function deleteItem(id: string): Promise<void> {

@@ -7,7 +7,7 @@ use std::fs;
 const KEYRING_SERVICE: &str = "PowerPaste";
 const KEYRING_ACCOUNT: &str = "sync-passphrase";
 const DEFAULT_HOTKEY: &str = "Command+Shift+V";
-const DEFAULT_THEME: &str = "glass";
+const DEFAULT_THEME: &str = "system";
 
 pub fn get<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Settings, String> {
     load_or_init_settings(app)

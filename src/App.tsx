@@ -6,13 +6,13 @@ import {
   deleteItem,
   enableMouseEvents,
   getSettings,
-  listCategories,
+  listPinboards,
   listItems,
   openAccessibilitySettings,
   openAutomationSettings,
   pasteText,
   hideMainWindow,
-  setItemCategory,
+  setItemPinboard,
   setItemPinned,
   setOverlayPreferredSize,
   setHotkey,
@@ -28,7 +28,8 @@ import "./App.css";
 import { SettingsModal } from "./components/SettingsModal";
 import { PermissionsModal } from "./components/PermissionsModal";
 import { BottomTray } from "./components/BottomTray";
-import { SaveToTabModal } from "./components/SaveToTabModal";
+import { SaveToPinboardModal } from "./components/SaveToPinboardModal";
+import { useSystemAccentColor } from "./hooks/useSystemAccentColor";
 
 const IS_SETTINGS_WINDOW =
   typeof window !== "undefined" &&
@@ -49,6 +50,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function App() {
+  // Apply system accent color
+  useSystemAccentColor();
+
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [query, setQuery] = useState("");
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -63,10 +67,10 @@ function App() {
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: ClipboardItem } | null>(null);
 
-  // Category/tab state
-  const [categories, setCategories] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<string | null>(null); // null = Clipboard (recent history)
-  const [saveToTabItem, setSaveToTabItem] = useState<ClipboardItem | null>(null);
+  // Pinboard state
+  const [pinboards, setPinboards] = useState<string[]>([]);
+  const [activePinboard, setActivePinboard] = useState<string | null>(null); // null = Clipboard (recent history)
+  const [saveToPinboardItem, setSaveToPinboardItem] = useState<ClipboardItem | null>(null);
 
   const lastSentOverlaySizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -76,13 +80,13 @@ function App() {
   const trayItems = useMemo(() => {
     let filtered = [...items];
     
-    // Filter by active tab
-    if (activeTab === null) {
-      // Clipboard tab: show items without a category (recent clipboard history)
-      filtered = filtered.filter((item) => !item.pin_category);
+    // Filter by active pinboard
+    if (activePinboard === null) {
+      // Clipboard tab: show items without a pinboard (recent clipboard history)
+      filtered = filtered.filter((item) => !item.pinboard);
     } else {
-      // Custom tab: show items with matching category
-      filtered = filtered.filter((item) => item.pin_category === activeTab);
+      // Custom pinboard: show items with matching pinboard
+      filtered = filtered.filter((item) => item.pinboard === activePinboard);
     }
     
     filtered.sort((a, b) => {
@@ -90,7 +94,7 @@ function App() {
       return b.created_at_ms - a.created_at_ms;
     });
     return filtered;
-  }, [items, activeTab]);
+  }, [items, activePinboard]);
 
   // Keep refs to avoid stale closures in event handlers
   const trayItemsRef = useRef(trayItems);
@@ -210,12 +214,12 @@ function App() {
     []
   );
 
-  const handleSaveToTab = useCallback(
-    async (item: ClipboardItem, category: string) => {
+  const handleSaveToPinboard = useCallback(
+    async (item: ClipboardItem, pinboard: string) => {
       let clearAfterMs = 1200;
       try {
-        await setItemCategory(item.id, category);
-        setSyncStatus(`Saved to "${category}"`);
+        await setItemPinboard(item.id, pinboard);
+        setSyncStatus(`Saved to "${pinboard}"`);
         await reload();
       } catch (e) {
         setSyncStatus(String(e));
@@ -227,12 +231,12 @@ function App() {
     []
   );
 
-  const handleRemoveFromTab = useCallback(
+  const handleRemoveFromPinboard = useCallback(
     async (item: ClipboardItem) => {
       let clearAfterMs = 1200;
       try {
-        await setItemCategory(item.id, null);
-        setSyncStatus("Removed from tab");
+        await setItemPinboard(item.id, null);
+        setSyncStatus("Removed from pinboard");
         await reload();
       } catch (e) {
         setSyncStatus(String(e));
@@ -295,19 +299,42 @@ function App() {
   );
 
   async function reload() {
-    const [s, it, cats] = await Promise.all([
+    const [s, it, pbs] = await Promise.all([
       getSettings(),
       listItems({ limit: 500, query: filteredQuery || undefined }),
-      listCategories(),
+      listPinboards(),
     ]);
     setSettings(s);
     setItems(it);
-    setCategories(cats);
+    setPinboards(pbs);
   }
 
+  // Apply theme with system preference detection and live sync
   useEffect(() => {
-    if (!settings?.theme) return;
-    document.documentElement.dataset.theme = settings.theme;
+    const theme = settings?.theme;
+    if (!theme) return;
+
+    const applyTheme = (resolvedTheme: "light" | "dark") => {
+      document.documentElement.dataset.theme = resolvedTheme;
+    };
+
+    if (theme === "system") {
+      // Detect OS preference
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+        applyTheme(e.matches ? "dark" : "light");
+      };
+      
+      // Apply initial value
+      handleChange(mediaQuery);
+      
+      // Listen for OS theme changes in real-time
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    } else {
+      // Direct theme: light or dark
+      applyTheme(theme);
+    }
   }, [settings?.theme]);
 
   // Enable mouse events for settings window (fixes macOS click-through issue)
@@ -562,6 +589,21 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Listen for settings_changed event to apply theme and other settings immediately
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const h = await listen<Settings>("settings_changed", (event) => {
+        console.log("[powerpaste] settings_changed event received:", event.payload);
+        setSettings(event.payload);
+      });
+      unlisten = h;
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     if (IS_SETTINGS_WINDOW) return;
 
@@ -751,26 +793,26 @@ function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="topbarTabs" role="tablist" aria-label="Tray categories">
+        <div className="topbarPinboards" role="tablist" aria-label="Pinboards">
           <button 
-            className={`topbarTab${activeTab === null ? " isActive" : ""}`}
+            className={`topbarPinboard${activePinboard === null ? " isActive" : ""}`}
             role="tab" 
-            aria-selected={activeTab === null}
+            aria-selected={activePinboard === null}
             type="button"
-            onClick={() => setActiveTab(null)}
+            onClick={() => setActivePinboard(null)}
           >
             📋 Clipboard
           </button>
-          {categories.map((cat) => (
+          {pinboards.map((pb) => (
             <button
-              key={cat}
-              className={`topbarTab${activeTab === cat ? " isActive" : ""}`}
+              key={pb}
+              className={`topbarPinboard${activePinboard === pb ? " isActive" : ""}`}
               role="tab"
-              aria-selected={activeTab === cat}
+              aria-selected={activePinboard === pb}
               type="button"
-              onClick={() => setActiveTab(cat)}
+              onClick={() => setActivePinboard(pb)}
             >
-              {cat}
+              {pb}
             </button>
           ))}
         </div>
@@ -847,30 +889,30 @@ function App() {
       <BottomTray
         items={trayItems}
         selectedIds={selectedIds}
-        categories={categories}
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
+        pinboards={pinboards}
+        activePinboard={activePinboard}
+        onPinboardChange={setActivePinboard}
         onSelect={selectItem}
         onCopy={onCopy}
         onPaste={onPaste}
         onDelete={handleDelete}
         onTogglePin={togglePinned}
-        onSaveToTab={(item) => setSaveToTabItem(item)}
-        onRemoveFromTab={handleRemoveFromTab}
+        onSaveToPinboard={(item) => setSaveToPinboardItem(item)}
+        onRemoveFromPinboard={handleRemoveFromPinboard}
         contextMenu={contextMenu}
         onContextMenu={(x, y, item) => setContextMenu({ x, y, item })}
         onCloseContextMenu={closeContextMenu}
       />
 
-      {/* Save to Tab Modal */}
-      {saveToTabItem && (
-        <SaveToTabModal
-          categories={categories}
-          onSave={(category) => {
-            void handleSaveToTab(saveToTabItem, category);
-            setSaveToTabItem(null);
+      {/* Save to Pinboard Modal */}
+      {saveToPinboardItem && (
+        <SaveToPinboardModal
+          pinboards={pinboards}
+          onSave={(pinboard) => {
+            void handleSaveToPinboard(saveToPinboardItem, pinboard);
+            setSaveToPinboardItem(null);
           }}
-          onCancel={() => setSaveToTabItem(null)}
+          onCancel={() => setSaveToPinboardItem(null)}
         />
       )}
 

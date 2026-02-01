@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Theme, UiMode, SyncProvider, Settings, setShowDockIcon } from "../api";
 
 interface SettingsModalProps {
@@ -27,15 +28,52 @@ export function SettingsModal(props: SettingsModalProps) {
   const [provider, setProvider] = useState<SyncProvider | null>(props.settings.sync_provider);
   const [folder, setFolder] = useState<string | null>(props.settings.sync_folder);
   const [passphrase, setPassphrase] = useState<string>("");
-  const [theme, setTheme] = useState<Theme>(props.settings.theme ?? "glass");
+  const [theme, setTheme] = useState<Theme>(props.settings.theme ?? "system");
   const [uiMode, setUiMode] = useState<UiMode>(props.settings.ui_mode ?? "floating");
   const [showDockIconState, setShowDockIconState] = useState(props.settings.show_dock_icon ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    // Apply theme with system preference detection for live preview
+    const applyTheme = (resolvedTheme: "light" | "dark") => {
+      document.documentElement.dataset.theme = resolvedTheme;
+    };
+
+    if (theme === "system") {
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+        applyTheme(e.matches ? "dark" : "light");
+      };
+      handleChange(mediaQuery);
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    } else {
+      applyTheme(theme);
+    }
   }, [theme]);
+
+  // Listen for settings_changed event to sync with external changes
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const h = await listen<Settings>("settings_changed", (event) => {
+        console.log("[powerpaste] SettingsModal: settings_changed event received:", event.payload);
+        const s = event.payload;
+        setHotkeyValue(s.hotkey);
+        setEnabled(s.sync_enabled);
+        setProvider(s.sync_provider);
+        setFolder(s.sync_folder);
+        setTheme(s.theme ?? "system");
+        setUiMode(s.ui_mode ?? "floating");
+        setShowDockIconState(s.show_dock_icon ?? false);
+      });
+      unlisten = h;
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   return (
     <div
@@ -70,9 +108,9 @@ export function SettingsModal(props: SettingsModalProps) {
             value={theme}
             onChange={(e) => setTheme(e.currentTarget.value as Theme)}
           >
-            <option value="glass">Glass (Light)</option>
-            <option value="midnight">Midnight (Dark)</option>
-            <option value="aurora">Aurora</option>
+            <option value="system">System (follow macOS)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
           </select>
           <div className="hint">Affects the main overlay and Settings window.</div>
         </div>

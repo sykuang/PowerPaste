@@ -8,9 +8,10 @@ pub struct ClipboardItem {
     pub text: String,
     pub created_at_ms: i64,
     pub pinned: bool,
-    /// Optional category name for user-created tabs (e.g., "Work Links", "API Keys")
-    #[serde(default)]
-    pub pin_category: Option<String>,
+    /// Optional pinboard name for user-created pinboards (e.g., "Work Links", "API Keys")
+    /// Field is named `pin_category` for backward compatibility, aliased to `pinboard` in JSON
+    #[serde(default, alias = "pin_category")]
+    pub pinboard: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,36 +1,36 @@
 import { useState } from "react";
 
-interface SaveToTabModalProps {
-  categories: string[];
-  onSave: (category: string) => void;
+interface SaveToPinboardModalProps {
+  pinboards: string[];
+  onSave: (pinboard: string) => void;
   onCancel: () => void;
 }
 
-export function SaveToTabModal(props: SaveToTabModalProps) {
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(
-    props.categories[0] ?? null
+export function SaveToPinboardModal(props: SaveToPinboardModalProps) {
+  const [selectedPinboard, setSelectedPinboard] = useState<string | null>(
+    props.pinboards[0] ?? null
   );
-  const [isCreatingNew, setIsCreatingNew] = useState(props.categories.length === 0);
-  const [newCategoryName, setNewCategoryName] = useState("");
+  const [isCreatingNew, setIsCreatingNew] = useState(props.pinboards.length === 0);
+  const [newPinboardName, setNewPinboardName] = useState("");
 
   const handleSave = () => {
     if (isCreatingNew) {
-      const name = newCategoryName.trim();
+      const name = newPinboardName.trim();
       if (name) {
         props.onSave(name);
       }
-    } else if (selectedCategory) {
-      props.onSave(selectedCategory);
+    } else if (selectedPinboard) {
+      props.onSave(selectedPinboard);
     }
   };
 
-  const canSave = isCreatingNew ? newCategoryName.trim().length > 0 : selectedCategory !== null;
+  const canSave = isCreatingNew ? newPinboardName.trim().length > 0 : selectedPinboard !== null;
 
   return (
     <div className="modalBackdrop" onClick={props.onCancel}>
-      <div className="modal saveToTabModal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal saveToPinboardModal" onClick={(e) => e.stopPropagation()}>
         <div className="modalHeader">
-          <div className="modalTitle">Save to Tab</div>
+          <div className="modalTitle">Save to Pinboard</div>
           <button
             type="button"
             className="btn"
@@ -42,18 +42,18 @@ export function SaveToTabModal(props: SaveToTabModalProps) {
         </div>
 
         <div className="section">
-          {props.categories.length > 0 && !isCreatingNew && (
+          {props.pinboards.length > 0 && !isCreatingNew && (
             <>
-              <label className="label">Choose a tab:</label>
-              <div className="categoryList">
-                {props.categories.map((cat) => (
+              <label className="label">Choose a pinboard:</label>
+              <div className="pinboardList">
+                {props.pinboards.map((pb) => (
                   <button
-                    key={cat}
+                    key={pb}
                     type="button"
-                    className={`categoryOption${selectedCategory === cat ? " isSelected" : ""}`}
-                    onClick={() => setSelectedCategory(cat)}
+                    className={`pinboardOption${selectedPinboard === pb ? " isSelected" : ""}`}
+                    onClick={() => setSelectedPinboard(pb)}
                   >
-                    {cat}
+                    {pb}
                   </button>
                 ))}
               </div>
@@ -62,22 +62,22 @@ export function SaveToTabModal(props: SaveToTabModalProps) {
                 className="btn createNewBtn"
                 onClick={() => {
                   setIsCreatingNew(true);
-                  setSelectedCategory(null);
+                  setSelectedPinboard(null);
                 }}
               >
-                + Create new tab
+                + Create new pinboard
               </button>
             </>
           )}
 
-          {(isCreatingNew || props.categories.length === 0) && (
+          {(isCreatingNew || props.pinboards.length === 0) && (
             <>
-              <label className="label">New tab name:</label>
+              <label className="label">New pinboard name:</label>
               <input
                 type="text"
                 className="input"
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
+                value={newPinboardName}
+                onChange={(e) => setNewPinboardName(e.target.value)}
                 placeholder="e.g., Work Links, API Keys..."
                 autoFocus
                 onKeyDown={(e) => {
@@ -89,16 +89,16 @@ export function SaveToTabModal(props: SaveToTabModalProps) {
                   }
                 }}
               />
-              {props.categories.length > 0 && (
+              {props.pinboards.length > 0 && (
                 <button
                   type="button"
                   className="btn backBtn"
                   onClick={() => {
                     setIsCreatingNew(false);
-                    setSelectedCategory(props.categories[0] ?? null);
+                    setSelectedPinboard(props.pinboards[0] ?? null);
                   }}
                 >
-                  ← Back to existing tabs
+                  ← Back to existing pinboards
                 </button>
               )}
             </>
