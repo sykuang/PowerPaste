@@ -47,6 +47,64 @@ fn image_hash(data: &[u8]) -> u64 {
     hasher.finish()
 }
 
+/// Calculate hash for text deduplication (normalizes whitespace)
+fn text_hash(text: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    // Normalize: trim and collapse whitespace differences
+    text.trim().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Get file URLs from the clipboard (macOS only)
+/// Returns a list of file paths if files are on the clipboard
+#[cfg(target_os = "macos")]
+fn get_clipboard_file_urls() -> Option<Vec<String>> {
+    use std::process::Command;
+    
+    // Use Swift to read file URLs from NSPasteboard
+    let swift_code = r#"
+import Cocoa
+
+let pasteboard = NSPasteboard.general
+
+// Check for file URLs
+if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+    if !urls.isEmpty {
+        for url in urls {
+            print(url.path)
+        }
+    }
+}
+"#;
+    
+    let output = Command::new("swift")
+        .args(["-e", swift_code])
+        .output()
+        .ok()?;
+    
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let paths: Vec<String> = stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        
+        if !paths.is_empty() {
+            return Some(paths);
+        }
+    }
+    
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_clipboard_file_urls() -> Option<Vec<String>> {
+    None
+}
+
 #[derive(Clone)]
 pub struct ClipboardWatcher {
     stop_flag: Arc<Mutex<bool>>,
@@ -59,7 +117,7 @@ impl ClipboardWatcher {
 
         std::thread::spawn(move || {
             let mut clipboard = Clipboard::new();
-            let mut last_text: Option<String> = None;
+            let mut last_text_hash: Option<u64> = None;
             let mut last_image_hash: Option<u64> = None;
 
             loop {
@@ -92,7 +150,7 @@ impl ClipboardWatcher {
                                 ) {
                                     Ok(Some(item)) => {
                                         last_image_hash = Some(hash);
-                                        last_text = None; // Reset text tracking
+                                        last_text_hash = None; // Reset text tracking
                                         let _ = app.emit("powerpaste://new_item", item);
                                     }
                                     Ok(None) => {
@@ -114,6 +172,35 @@ impl ClipboardWatcher {
                     }
                 }
 
+                // Check for file URLs on clipboard (e.g., from Finder)
+                if let Some(file_paths) = get_clipboard_file_urls() {
+                    // Join paths with newline for storage
+                    let text = file_paths.join("\n");
+                    let current_hash = text_hash(&text);
+                    
+                    if last_text_hash != Some(current_hash) {
+                        let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                        
+                        // Store as file content type
+                        match db::insert_text_with_source_app(&app, &text, Some("file".to_string()), source_app_name, source_app_bundle_id) {
+                            Ok(Some(item)) => {
+                                last_text_hash = Some(current_hash);
+                                last_image_hash = None;
+                                let _ = app.emit("powerpaste://new_item", item);
+                            }
+                            Ok(None) => {
+                                last_text_hash = Some(current_hash);
+                            }
+                            Err(e) => {
+                                eprintln!("[powerpaste] failed to insert file paths: {e}");
+                            }
+                        }
+                    }
+                    
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+
                 // Fall back to text
                 let text = match clipboard.as_mut().ok().and_then(|c| c.get_text().ok()) {
                     Some(t) => t,
@@ -123,7 +210,9 @@ impl ClipboardWatcher {
                     }
                 };
 
-                if last_text.as_deref() == Some(&text) {
+                // Use hash comparison to avoid issues with minor formatting differences
+                let current_hash = text_hash(&text);
+                if last_text_hash == Some(current_hash) {
                     std::thread::sleep(Duration::from_millis(500));
                     continue;
                 }
@@ -136,12 +225,12 @@ impl ClipboardWatcher {
 
                 match db::insert_text_with_source_app(&app, &text, content_type, source_app_name, source_app_bundle_id) {
                     Ok(Some(item)) => {
-                        last_text = Some(text);
+                        last_text_hash = Some(current_hash);
                         last_image_hash = None; // Reset image tracking
                         let _ = app.emit("powerpaste://new_item", item);
                     }
                     Ok(None) => {
-                        last_text = Some(text);
+                        last_text_hash = Some(current_hash);
                     }
                     Err(e) => {
                         eprintln!("[powerpaste] failed to insert text: {e}");
@@ -168,4 +257,56 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|e| format!("clipboard set failed: {e}"))
+}
+
+/// Write file paths to the clipboard (macOS: as file URLs that Finder can paste)
+#[cfg(target_os = "macos")]
+pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
+    use std::process::Command;
+    
+    if paths.is_empty() {
+        return Err("no file paths provided".to_string());
+    }
+    
+    // Use Swift to properly set NSPasteboard with file URLs
+    // This ensures Finder can paste the files correctly
+    let mut swift_code = String::from(r#"
+import Cocoa
+
+let pasteboard = NSPasteboard.general
+pasteboard.clearContents()
+
+var urls: [URL] = []
+"#);
+    
+    for path in paths.iter() {
+        // Escape the path for Swift string literal
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        swift_code.push_str(&format!(
+            "urls.append(URL(fileURLWithPath: \"{}\"))\n",
+            escaped
+        ));
+    }
+    
+    swift_code.push_str(r#"
+pasteboard.writeObjects(urls as [NSPasteboardWriting])
+"#);
+    
+    let output = Command::new("swift")
+        .args(["-e", &swift_code])
+        .output()
+        .map_err(|e| format!("failed to run swift: {e}"))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("swift failed: {stderr}"));
+    }
+    
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
+    // TODO: Implement for Windows using OLE clipboard with CF_HDROP format
+    Err("file clipboard not yet implemented on this platform".to_string())
 }

@@ -23,6 +23,20 @@ export type Settings = {
   ui_mode: UiMode;
   /** macOS only: show app icon in Dock (default false = menu bar app only) */
   show_dock_icon: boolean;
+  /** History retention in days (null = forever) - synced across devices */
+  history_retention_days: number | null;
+  /** Whether trash bin is enabled (synced across devices) */
+  trash_enabled: boolean;
+  /** Trash retention in days (null = forever) - synced across devices */
+  trash_retention_days: number | null;
+  /** Connected OAuth providers with account info */
+  connected_providers: ConnectedProviderInfo[];
+};
+
+export type ConnectedProviderInfo = {
+  provider: SyncProvider;
+  account_email: string;
+  account_id: string;
 };
 
 export type ClipboardItem = {
@@ -47,6 +61,10 @@ export type ClipboardItem = {
   source_app_name?: string;
   /** Bundle ID of the source app (e.g., "com.apple.Safari") */
   source_app_bundle_id?: string;
+  /** Whether the item is in trash */
+  is_trashed?: boolean;
+  /** Timestamp when the item was moved to trash (ms since epoch) */
+  deleted_at_ms?: number;
 };
 
 export type PermissionsStatus = {
@@ -123,6 +141,10 @@ export async function writeClipboardText(text: string): Promise<void> {
   return invoke("write_clipboard_text", { text });
 }
 
+export async function writeClipboardFiles(paths: string[]): Promise<void> {
+  return invoke("write_clipboard_files", { paths });
+}
+
 export async function pasteText(text: string): Promise<void> {
   return invoke("paste_text", { text });
 }
@@ -170,6 +192,108 @@ export async function enableMouseEvents(): Promise<void> {
 export async function setShowDockIcon(show: boolean): Promise<Settings> {
   return invoke("set_show_dock_icon", { show });
 }
+
+/** Set the theme (light, dark, or system) */
+export async function setTheme(theme: Theme): Promise<Settings> {
+  return invoke("set_theme", { theme });
+}
+
+/** Set history retention in days (null = forever) - synced across devices */
+export async function setHistoryRetention(days: number | null): Promise<Settings> {
+  return invoke("set_history_retention", { days });
+}
+
+/** Enable or disable trash bin - synced across devices */
+export async function setTrashEnabled(enabled: boolean): Promise<Settings> {
+  return invoke("set_trash_enabled", { enabled });
+}
+
+/** Set trash retention in days (null = forever) - synced across devices */
+export async function setTrashRetention(days: number | null): Promise<Settings> {
+  return invoke("set_trash_retention", { days });
+}
+
+/** Result of connecting a sync provider via OAuth */
+export type ConnectedProviderResult = {
+  provider: SyncProvider;
+  accountEmail: string;
+  accountId: string;
+};
+
+/** Connect a sync provider via OAuth */
+export async function connectSyncProvider(provider: SyncProvider): Promise<ConnectedProviderResult> {
+  return invoke("connect_sync_provider", { provider });
+}
+
+/** Disconnect a sync provider */
+export async function disconnectSyncProvider(provider: SyncProvider): Promise<void> {
+  return invoke("disconnect_sync_provider", { provider });
+}
+
+/** List clipboard items with pagination */
+export async function listItemsPaginated(args: {
+  limit: number;
+  offset: number;
+  query?: string;
+  includeTrashed?: boolean;
+}): Promise<{ items: ClipboardItem[]; total: number }> {
+  return invoke("list_items_paginated", {
+    limit: args.limit,
+    offset: args.offset,
+    query: args.query ?? null,
+    includeTrashed: args.includeTrashed ?? false,
+  });
+}
+
+/** List trashed items with pagination */
+export async function listTrashedItems(args: {
+  limit: number;
+  offset: number;
+}): Promise<{ items: ClipboardItem[]; total: number }> {
+  return invoke("list_trashed_items", {
+    limit: args.limit,
+    offset: args.offset,
+  });
+}
+
+/** Get the count of items in trash */
+export async function getTrashCount(): Promise<number> {
+  return invoke("get_trash_count");
+}
+
+/** Restore an item from trash */
+export async function restoreFromTrash(id: string): Promise<void> {
+  return invoke("restore_from_trash", { id });
+}
+
+/** Permanently delete an item (bypass trash) */
+export async function deleteItemForever(id: string): Promise<void> {
+  return invoke("delete_item_forever", { id });
+}
+
+/** Move an item to the top of the list by updating its timestamp */
+export async function touchItem(id: string): Promise<boolean> {
+  return invoke("touch_item", { id });
+}
+
+/** Empty the trash (permanently delete all trashed items) */
+export async function emptyTrash(): Promise<void> {
+  return invoke("empty_trash");
+}
+
+/** List pinboard items with pagination */
+export async function listPinboardItemsPaginated(args: {
+  limit: number;
+  offset: number;
+  pinboard?: string | null;
+}): Promise<{ items: ClipboardItem[]; total: number }> {
+  return invoke("list_pinboard_items_paginated", {
+    limit: args.limit,
+    offset: args.offset,
+    pinboard: args.pinboard ?? null,
+  });
+}
+
 /** Get the file system path to an app's icon by its bundle ID */
 export async function getAppIconPath(bundleId: string): Promise<string | null> {
   return invoke("get_app_icon_path", { bundleId });

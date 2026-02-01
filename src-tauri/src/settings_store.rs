@@ -1,4 +1,4 @@
-use crate::models::{Settings, SyncProvider, UiMode};
+use crate::models::{ConnectedProviderInfo, Settings, SyncProvider, UiMode};
 use crate::paths::{app_data_dir, settings_path};
 use base64::Engine as _;
 use rand::RngCore;
@@ -41,6 +41,10 @@ pub fn load_or_init_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Re
         theme: DEFAULT_THEME.to_string(),
         ui_mode: UiMode::default(),
         show_dock_icon: false,
+        history_retention_days: None,
+        trash_enabled: true,
+        trash_retention_days: Some(30),
+        connected_providers: Vec::new(),
     };
     save_settings(app, &s)?;
     Ok(s)
@@ -65,6 +69,46 @@ pub fn set_ui_mode<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: S
 
 pub fn set_show_dock_icon<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, show: bool) -> Result<Settings, String> {
     settings.show_dock_icon = show;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_history_retention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, days: Option<i32>) -> Result<Settings, String> {
+    settings.history_retention_days = days;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_trash_enabled<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, enabled: bool) -> Result<Settings, String> {
+    settings.trash_enabled = enabled;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_trash_retention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, days: Option<i32>) -> Result<Settings, String> {
+    settings.trash_retention_days = days;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn add_connected_provider<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    mut settings: Settings,
+    provider_info: ConnectedProviderInfo,
+) -> Result<Settings, String> {
+    // Remove existing entry for this provider if any
+    settings.connected_providers.retain(|p| p.provider != provider_info.provider);
+    settings.connected_providers.push(provider_info);
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn remove_connected_provider<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    mut settings: Settings,
+    provider: SyncProvider,
+) -> Result<Settings, String> {
+    settings.connected_providers.retain(|p| p.provider != provider);
     save_settings(app, &settings)?;
     Ok(settings)
 }

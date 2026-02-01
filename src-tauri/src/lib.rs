@@ -5,7 +5,7 @@ mod paths;
 mod settings_store;
 mod sync;
 
-use models::{ClipboardItem, Settings, SyncProvider};
+use models::{ClipboardItem, ConnectedProviderInfo, Settings, SyncProvider, UiMode};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -74,8 +74,15 @@ fn append_debug_log(line: &str) {
 
 // Overlay sizing: computed from the active monitor each time we show the window.
 // Uses screen fractions for responsive sizing across all display sizes.
-const OVERLAY_WIDTH_FRACTION: f64 = 0.99;
-const OVERLAY_HEIGHT_FRACTION: f64 = 0.23;
+
+// Fixed mode: horizontal strip at bottom (like Paste app)
+const FIXED_WIDTH_FRACTION: f64 = 0.99;
+const FIXED_HEIGHT_FRACTION: f64 = 0.23;
+
+// Floating mode: narrow vertical popup near cursor
+const FLOATING_WIDTH_PX: u32 = 320;      // Fixed width for consistent card layout
+const FLOATING_HEIGHT_FRACTION: f64 = 0.50;  // Up to 50% of screen height
+const FLOATING_MAX_HEIGHT_PX: u32 = 480;     // Cap max height
 
 // Preferred overlay size, optionally set by the frontend at runtime.
 static OVERLAY_PREFERRED_SIZE: OnceLock<Mutex<Option<(u32, u32)>>> = OnceLock::new();
@@ -93,13 +100,22 @@ fn get_overlay_preferred_size_global() -> Option<(u32, u32)> {
     *guard
 }
 
-fn overlay_size_for_monitor(monitor_width: u32, monitor_height: u32) -> (u32, u32) {
-    // Always use screen fractions - ignore any cached preferred size from frontend
-    // This ensures consistent sizing across app restarts
-    let width = ((monitor_width as f64) * OVERLAY_WIDTH_FRACTION).round() as u32;
-    let height = ((monitor_height as f64) * OVERLAY_HEIGHT_FRACTION).round() as u32;
-
-    (width, height)
+fn overlay_size_for_monitor(monitor_width: u32, monitor_height: u32, ui_mode: models::UiMode) -> (u32, u32) {
+    match ui_mode {
+        models::UiMode::Floating => {
+            // Floating mode: narrow vertical popup
+            let width = FLOATING_WIDTH_PX;
+            let height = ((monitor_height as f64) * FLOATING_HEIGHT_FRACTION).round() as u32;
+            let height = height.min(FLOATING_MAX_HEIGHT_PX);
+            (width, height)
+        }
+        models::UiMode::Fixed => {
+            // Fixed mode: wide horizontal strip at bottom
+            let width = ((monitor_width as f64) * FIXED_WIDTH_FRACTION).round() as u32;
+            let height = ((monitor_height as f64) * FIXED_HEIGHT_FRACTION).round() as u32;
+            (width, height)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -889,6 +905,150 @@ fn apply_dock_icon_visibility(show: bool) {
 }
 
 #[tauri::command]
+fn set_theme(app: tauri::AppHandle, theme: String) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_theme(&app, settings, theme)?;
+    let _ = app.emit("settings_changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_history_retention(app: tauri::AppHandle, days: Option<i32>) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_history_retention(&app, settings, days)?;
+    
+    // If retention is set, trigger cleanup
+    if let Some(d) = days {
+        let trash_enabled = settings.trash_enabled;
+        let _ = db::cleanup_old_items(&app, d, trash_enabled);
+    }
+    
+    let _ = app.emit("settings_changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_trash_enabled(app: tauri::AppHandle, enabled: bool) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_trash_enabled(&app, settings, enabled)?;
+    let _ = app.emit("settings_changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_trash_retention(app: tauri::AppHandle, days: Option<i32>) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_trash_retention(&app, settings, days)?;
+    
+    // If retention is set, trigger cleanup
+    if let Some(d) = days {
+        let _ = db::cleanup_old_trash(&app, d);
+    }
+    
+    let _ = app.emit("settings_changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn connect_sync_provider(app: tauri::AppHandle, provider: SyncProvider) -> Result<ConnectedProviderInfo, String> {
+    // TODO: Implement OAuth flow for each provider
+    // For now, return a stub that simulates a successful connection
+    let provider_info = ConnectedProviderInfo {
+        provider: provider.clone(),
+        account_email: match &provider {
+            SyncProvider::IcloudDrive => "user@icloud.com".to_string(),
+            SyncProvider::OneDrive => "user@outlook.com".to_string(),
+            SyncProvider::GoogleDrive => "user@gmail.com".to_string(),
+            SyncProvider::CustomFolder => return Err("Custom folder does not support OAuth".to_string()),
+        },
+        account_id: format!("{:?}-user-id", provider),
+    };
+    
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::add_connected_provider(&app, settings, provider_info.clone())?;
+    let _ = app.emit("settings_changed", &settings);
+    
+    Ok(provider_info)
+}
+
+#[tauri::command]
+fn disconnect_sync_provider(app: tauri::AppHandle, provider: SyncProvider) -> Result<(), String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::remove_connected_provider(&app, settings, provider)?;
+    let _ = app.emit("settings_changed", &settings);
+    Ok(())
+}
+
+/// Paginated list result
+#[derive(Serialize, Deserialize)]
+struct PaginatedItems {
+    items: Vec<ClipboardItem>,
+    total: u32,
+}
+
+#[tauri::command]
+fn list_items_paginated(
+    app: tauri::AppHandle,
+    limit: u32,
+    offset: u32,
+    query: Option<String>,
+    include_trashed: Option<bool>,
+) -> Result<PaginatedItems, String> {
+    if include_trashed.unwrap_or(false) {
+        let (items, total) = db::list_trashed_items(&app, limit, offset)?;
+        Ok(PaginatedItems { items, total })
+    } else {
+        let (items, total) = db::list_items_paginated(&app, limit, offset, query)?;
+        Ok(PaginatedItems { items, total })
+    }
+}
+
+#[tauri::command]
+fn list_trashed_items(app: tauri::AppHandle, limit: u32, offset: u32) -> Result<PaginatedItems, String> {
+    let (items, total) = db::list_trashed_items(&app, limit, offset)?;
+    Ok(PaginatedItems { items, total })
+}
+
+#[tauri::command]
+fn get_trash_count(app: tauri::AppHandle) -> Result<u32, String> {
+    db::get_trash_count(&app)
+}
+
+#[tauri::command]
+fn restore_from_trash(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
+    db::restore_from_trash(&app, id)
+}
+
+#[tauri::command]
+fn delete_item_forever(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
+    db::delete_item_forever(&app, id)
+}
+
+#[tauri::command]
+fn touch_item(app: tauri::AppHandle, id: String) -> Result<bool, String> {
+    let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
+    db::touch_item(&app, id)
+}
+
+#[tauri::command]
+fn empty_trash(app: tauri::AppHandle) -> Result<u32, String> {
+    db::empty_trash(&app)
+}
+
+#[tauri::command]
+fn list_pinboard_items_paginated(
+    app: tauri::AppHandle,
+    limit: u32,
+    offset: u32,
+    pinboard: Option<String>,
+) -> Result<PaginatedItems, String> {
+    let (items, total) = db::list_pinboard_items_paginated(&app, limit, offset, pinboard)?;
+    Ok(PaginatedItems { items, total })
+}
+
+#[tauri::command]
 fn list_items(app: tauri::AppHandle, limit: u32, query: Option<String>) -> Result<Vec<ClipboardItem>, String> {
     db::list_items(&app, limit, query)
 }
@@ -921,7 +1081,14 @@ fn list_pinboards(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn delete_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
-    db::delete_item(&app, id)
+    
+    // Check if trash is enabled - if so, move to trash instead of permanent delete
+    let settings = settings_store::get(&app)?;
+    if settings.trash_enabled {
+        db::trash_item(&app, id)
+    } else {
+        db::delete_item(&app, id)
+    }
 }
 
 /// Ensure the calling window accepts mouse events (fixes macOS click-through issues).
@@ -1058,6 +1225,11 @@ fn get_app_icon_path(app: tauri::AppHandle, bundle_id: String) -> Result<Option<
 #[tauri::command]
 fn write_clipboard_text(text: String) -> Result<(), String> {
     clipboard::set_clipboard_text(&text)
+}
+
+#[tauri::command]
+fn write_clipboard_files(paths: Vec<String>) -> Result<(), String> {
+    clipboard::set_clipboard_files(&paths)
 }
 
 #[tauri::command]
@@ -1363,9 +1535,11 @@ fn toggle_standard_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -
             // Calculate proper size and position like NSPanel code
             if let Some(screen) = NSScreen::mainScreen(mtm) {
                 let screen_frame: NSRect = screen.frame();
+                let ui_mode = get_current_ui_mode();
                 let (w, h) = overlay_size_for_monitor(
                     screen_frame.size.width.max(1.0).round() as u32,
                     screen_frame.size.height.max(1.0).round() as u32,
+                    ui_mode,
                 );
                 
                 // Position at bottom center of screen
@@ -1547,18 +1721,46 @@ fn toggle_nspanel_overlay(
             eprintln!("[powerpaste] saved frontmost app: {}", name);
         }
         
-        // Position and size the panel
+        // Position and size the panel based on UI mode
         if let Some(screen) = NSScreen::mainScreen(mtm) {
             let screen_frame: NSRect = screen.frame();
+            let ui_mode = get_current_ui_mode();
             let (w, h) = overlay_size_for_monitor(
                 screen_frame.size.width.max(1.0).round() as u32,
                 screen_frame.size.height.max(1.0).round() as u32,
+                ui_mode,
             );
             
-            // Position at bottom center of screen
-            let x = (screen_frame.size.width - w as f64) / 2.0;
-            // For NSPanel, y=0 is bottom of screen, so position at y = small offset from bottom
-            let y = 10.0; // Small offset from bottom edge
+            // Calculate position based on UI mode
+            let (x, y) = match ui_mode {
+                models::UiMode::Floating => {
+                    // Position below cursor (vertically arranged cards)
+                    if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
+                        // Align left edge to cursor, position below cursor
+                        let mut calc_x = cursor_x;
+                        // Position 10px below cursor (in Cocoa coordinates, y increases upward)
+                        // So we subtract height + gap to go below
+                        let mut calc_y = cursor_y - h as f64 - 10.0;
+                        
+                        // Clamp to screen bounds
+                        calc_x = calc_x.max(screen_frame.origin.x).min(screen_frame.origin.x + screen_frame.size.width - w as f64);
+                        calc_y = calc_y.max(screen_frame.origin.y).min(screen_frame.origin.y + screen_frame.size.height - h as f64);
+                        
+                        (calc_x, calc_y)
+                    } else {
+                        // Fallback to center if cursor position unavailable
+                        let calc_x = (screen_frame.size.width - w as f64) / 2.0;
+                        let calc_y = (screen_frame.size.height - h as f64) / 2.0;
+                        (calc_x, calc_y)
+                    }
+                }
+                models::UiMode::Fixed => {
+                    // Fixed at bottom center of screen
+                    let calc_x = (screen_frame.size.width - w as f64) / 2.0;
+                    let calc_y = 10.0; // Small offset from bottom edge
+                    (calc_x, calc_y)
+                }
+            };
             
             // Set size and position on the underlying window
             if let Some(tauri_window) = panel.to_window() {
@@ -1566,7 +1768,7 @@ fn toggle_nspanel_overlay(
                 // Tauri uses screen coordinates where y=0 is top
                 let tauri_y = screen_frame.size.height - h as f64 - y;
                 tauri_window.set_position(tauri::LogicalPosition::new(x as i32, tauri_y as i32)).ok();
-                eprintln!("[powerpaste] panel sized to {}x{} at ({}, {})", w, h, x, tauri_y);
+                eprintln!("[powerpaste] panel sized to {}x{} at ({}, {}) [ui_mode={:?}]", w, h, x, tauri_y, ui_mode);
             }
         }
         
@@ -1689,24 +1891,24 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             .or_else(|| NSScreen::mainScreen(mtm))
             .ok_or("no screen found")?;
         let screen_frame: NSRect = screen.frame();
+        let ui_mode = get_current_ui_mode();
         let (w, h) = overlay_size_for_monitor(
             screen_frame.size.width.max(1.0).round() as u32,
             screen_frame.size.height.max(1.0).round() as u32,
+            ui_mode,
         );
         let mut target = screen_frame;
         target.size.width = (w as f64).min(screen_frame.size.width);
         target.size.height = (h as f64).min(screen_frame.size.height);
         
         // Position based on UI mode
-        let ui_mode = get_current_ui_mode();
         match ui_mode {
             models::UiMode::Floating => {
-                // Position near cursor
+                // Position below cursor (vertically arranged cards)
                 if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
-                    // Center horizontally on cursor, position above cursor
-                    let half_width = target.size.width / 2.0;
-                    let mut x = cursor_x - half_width;
-                    let mut y = cursor_y - target.size.height - 10.0; // 10px above cursor
+                    // Align left edge to cursor, position below cursor
+                    let mut x = cursor_x;
+                    let mut y = cursor_y - target.size.height - 10.0; // 10px below cursor
                     
                     // Clamp to screen bounds
                     x = x.max(screen_frame.origin.x).min(screen_frame.origin.x + screen_frame.size.width - target.size.width);
@@ -1715,9 +1917,9 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
                     target.origin.x = x;
                     target.origin.y = y;
                 } else {
-                    // Fallback to center-bottom if cursor position unavailable
+                    // Fallback to center if cursor position unavailable
                     target.origin.x = screen_frame.origin.x + (screen_frame.size.width - target.size.width) / 2.0;
-                    target.origin.y = screen_frame.origin.y;
+                    target.origin.y = screen_frame.origin.y + (screen_frame.size.height - target.size.height) / 2.0;
                 }
             }
             models::UiMode::Fixed => {
@@ -1844,22 +2046,23 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         .ok_or("no screen found")?;
 
     let screen_frame: NSRect = screen.frame();
+    let ui_mode = get_current_ui_mode();
     let (w, h) = overlay_size_for_monitor(
         screen_frame.size.width.max(1.0).round() as u32,
         screen_frame.size.height.max(1.0).round() as u32,
+        ui_mode,
     );
     let mut target = screen_frame;
     target.size.width = (w as f64).min(screen_frame.size.width);
     target.size.height = (h as f64).min(screen_frame.size.height);
     
     // Position based on UI mode
-    let ui_mode = get_current_ui_mode();
     match ui_mode {
         models::UiMode::Floating => {
-            // Position near cursor
+            // Position below cursor (vertically arranged cards)
             if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
-                let half_width = target.size.width / 2.0;
-                let mut x = cursor_x - half_width;
+                // Align left edge to cursor, position below cursor
+                let mut x = cursor_x;
                 let mut y = cursor_y - target.size.height - 10.0;
                 
                 x = x.max(screen_frame.origin.x).min(screen_frame.origin.x + screen_frame.size.width - target.size.width);
@@ -1869,7 +2072,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
                 target.origin.y = y;
             } else {
                 target.origin.x = screen_frame.origin.x + (screen_frame.size.width - target.size.width) / 2.0;
-                target.origin.y = screen_frame.origin.y;
+                target.origin.y = screen_frame.origin.y + (screen_frame.size.height - target.size.height) / 2.0;
             }
         }
         models::UiMode::Fixed => {
@@ -2158,7 +2361,8 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     let size = monitor.size();
     let pos = monitor.position();
 
-    let (width, height) = overlay_size_for_monitor(size.width, size.height);
+    let ui_mode = get_current_ui_mode();
+    let (width, height) = overlay_size_for_monitor(size.width, size.height, ui_mode);
     let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
     let y = pos.y + (size.height.saturating_sub(height)) as i32;
 
@@ -2298,9 +2502,11 @@ fn macos_set_overlay_window_active<R: tauri::Runtime>(
 
                 if let Some(screen) = screen {
                     let screen_frame: NSRect = screen.frame();
+                    let ui_mode = get_current_ui_mode();
                     let (w, h) = overlay_size_for_monitor(
                         screen_frame.size.width.max(1.0).round() as u32,
                         screen_frame.size.height.max(1.0).round() as u32,
+                        ui_mode,
                     );
                     let mut target = screen_frame;
                     target.size.width = (w as f64).min(screen_frame.size.width);
@@ -2738,7 +2944,21 @@ pub fn run() {
             set_hotkey,
             set_sync_settings,
             set_ui_mode,
+            set_theme,
+            set_history_retention,
+            set_trash_enabled,
+            set_trash_retention,
+            connect_sync_provider,
+            disconnect_sync_provider,
             list_items,
+            list_items_paginated,
+            list_trashed_items,
+            list_pinboard_items_paginated,
+            get_trash_count,
+            restore_from_trash,
+            delete_item_forever,
+            touch_item,
+            empty_trash,
             get_image_data,
             get_app_icon_path,
             set_overlay_preferred_size,
@@ -2749,6 +2969,7 @@ pub fn run() {
             delete_item,
             enable_mouse_events,
             write_clipboard_text,
+            write_clipboard_files,
             paste_text,
             check_permissions,
             open_accessibility_settings,

@@ -27,6 +27,7 @@ vi.mock("./api", () => {
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
       theme: "system",
+      ui_mode: "fixed",
     })),
     listItems: vi.fn(async () => [
       {
@@ -47,6 +48,7 @@ vi.mock("./api", () => {
       },
     ]),
     listPinboards: vi.fn(async () => []),
+    getTrashCount: vi.fn(async () => 0),
     listCategories: vi.fn(async () => []),
     setItemCategory: vi.fn(async () => undefined),
     setHotkey: vi.fn(async () => ({
@@ -57,6 +59,7 @@ vi.mock("./api", () => {
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
       theme: "system",
+      ui_mode: "fixed",
     })),
     setSyncSettings: vi.fn(async () => ({
       device_id: "test-device",
@@ -66,11 +69,14 @@ vi.mock("./api", () => {
       sync_salt_b64: null,
       hotkey: "Ctrl+Shift+V",
       theme: "system",
+      ui_mode: "fixed",
     })),
     setItemPinned: vi.fn(async () => undefined),
     deleteItem: vi.fn(async () => undefined),
     writeClipboardText: vi.fn(async () => undefined),
+    writeClipboardFiles: vi.fn(async () => undefined),
     pasteText: vi.fn(async () => undefined),
+    touchItem: vi.fn(async () => true),
     checkPermissions: vi.fn(async () => ({
       platform: "macos",
       can_paste: true,
@@ -93,10 +99,11 @@ describe("App", () => {
   it("renders and shows tray clipboard items", async () => {
     render(<App />);
 
-    expect(screen.getByText("Clipboard History")).toBeInTheDocument();
+    // Wait for settings to load and app to render
+    expect(await screen.findByText("Clipboard History")).toBeInTheDocument();
     // Search is now an icon button that expands on click
     expect(
-      screen.getByRole("button", { name: /search/i }),
+      await screen.findByRole("button", { name: /search/i }),
     ).toBeInTheDocument();
 
     // Reload runs on mount; wait for mocked items to appear in the bottom tray.

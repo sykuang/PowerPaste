@@ -174,6 +174,57 @@ body {
   background: var(--pp-surface-strong);
 }
 
+/* Trash toggle button */
+.topbarTrash {
+  position: relative;
+}
+
+.topbarTrash.isActive {
+  color: var(--pp-accent);
+  background: color-mix(in srgb, var(--pp-accent) 15%, transparent);
+}
+
+.trashBadge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  background: #e53935;
+  border-radius: 7px;
+}
+
+.btnSmall {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Empty Trash button positioned on the right */
+.topbarEmptyTrash {
+  position: absolute;
+  right: 56px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Confirmation modal */
+.confirmModal {
+  max-width: 320px;
+}
+
+.confirmMessage {
+  font-size: 13px;
+  color: var(--pp-muted);
+  margin: 12px 0 20px;
+  line-height: 1.5;
+}
+
 /* Settings button positioned on the right */
 .topbarSettings {
   position: absolute;
@@ -220,6 +271,25 @@ body {
   height: 8px;
   border-radius: 50%;
   background: var(--pp-accent);
+}
+
+/* Pinboard labels - hide when search is expanded to save space */
+.pinboardLabel {
+  transition: all 0.15s ease;
+}
+
+.topbarCenter.searchExpanded .topbarPinboard {
+  padding: 6px 10px;
+  gap: 0;
+}
+
+.topbarCenter.searchExpanded .pinboardLabel {
+  display: none;
+}
+
+.topbarCenter.searchExpanded .pinboardRenameInput {
+  /* Still show rename input when editing */
+  display: inline-block;
 }
 
 /* Search input */
@@ -345,6 +415,13 @@ body {
   padding: 0;
 }
 
+/* Settings modal in settings window context */
+.settingsWindow .settingsModal {
+  -webkit-app-region: no-drag;
+  max-height: calc(100vh - 32px);
+  width: min(520px, 100%);
+}
+
 .settingsWindow .modal {
   /* No dragging - let everything be clickable */
   -webkit-app-region: no-drag;
@@ -353,12 +430,10 @@ body {
   overflow-y: auto;
 }
 
-.settingsWindow .modalHeader {
+.settingsWindow .modalHeader,
+.settingsWindow .settingsHeader {
   -webkit-app-region: no-drag;
   cursor: default;
-  padding: 4px 0 8px 0;
-  margin: -4px -4px 10px -4px;
-  border-radius: 14px 14px 0 0;
 }
 
 .settingsWindow .modalHeader .modalTitle {
@@ -372,12 +447,16 @@ body {
 .settingsWindow .modal input,
 .settingsWindow .modal select,
 .settingsWindow .modal label,
-.settingsWindow .modal .section {
+.settingsWindow .modal .section,
+.settingsWindow .settingsModal button,
+.settingsWindow .settingsModal input,
+.settingsWindow .settingsModal select,
+.settingsWindow .settingsModal label {
   -webkit-app-region: no-drag;
 }
 
 .settingsWindow.app {
-  width: min(860px, 100%);
+  width: min(560px, 100%);
 }
 
 .modal {
@@ -467,6 +546,625 @@ body {
   border: 1px solid var(--pp-danger-border);
   color: var(--pp-danger-text);
   font-size: 13px;
+}
+
+.errorInline {
+  font-size: 12px;
+  color: var(--pp-danger-text);
+  margin-top: 4px;
+}
+
+.warningInline {
+  font-size: 12px;
+  color: var(--pp-warning-text, #b45309);
+  margin-top: 4px;
+}
+
+/* Hotkey Recorder */
+.hotkeyRecorder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface-strong);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--pp-text);
+  transition: all 0.15s ease;
+}
+
+.hotkeyRecorder:hover {
+  border-color: var(--pp-accent-border);
+  background: var(--pp-accent-soft);
+}
+
+.hotkeyRecorder.recording {
+  border-color: var(--pp-accent);
+  background: var(--pp-accent-soft);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.hotkeyPlaceholder {
+  color: var(--pp-muted);
+  font-style: italic;
+}
+
+.hotkeyKeys {
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SETTINGS MODAL - Professional Redesign
+   Clean sections, proper hierarchy, smooth interactions
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.settingsModal {
+  width: min(520px, 92vw);
+  max-height: calc(100vh - 48px);
+  border-radius: 20px;
+  background: var(--pp-surface-strong);
+  backdrop-filter: blur(var(--pp-blur-lg)) var(--pp-saturate);
+  -webkit-backdrop-filter: blur(var(--pp-blur-lg)) var(--pp-saturate);
+  border: 1px solid var(--pp-border);
+  box-shadow: 
+    inset 0 1px 0 0 var(--pp-shine),
+    0 24px 80px rgba(0, 0, 0, 0.25),
+    0 8px 24px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  -webkit-app-region: no-drag;
+}
+
+/* Settings Header */
+.settingsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--pp-border-weak);
+  background: var(--pp-surface);
+}
+
+.settingsTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--pp-text);
+  letter-spacing: -0.01em;
+}
+
+.settingsCloseBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pp-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settingsCloseBtn:hover {
+  background: var(--pp-surface-strong);
+  color: var(--pp-text);
+}
+
+.settingsCloseBtn:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+}
+
+/* Settings Content */
+.settingsContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 20px 20px;
+}
+
+/* Settings Section */
+.settingsSection {
+  padding: 16px 0;
+}
+
+.settingsSection:not(:last-child) {
+  border-bottom: 1px solid var(--pp-border-xweak);
+}
+
+.settingsSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: var(--pp-muted);
+}
+
+.settingsSectionTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pp-muted);
+}
+
+.settingsSectionDesc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--pp-muted);
+  line-height: 1.5;
+}
+
+/* Settings Row */
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  min-height: 44px;
+}
+
+.settingsSubRow {
+  padding-left: 28px;
+  opacity: 0.95;
+}
+
+.settingsRowLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settingsRowTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--pp-text);
+}
+
+.settingsRowHint {
+  font-size: 12px;
+  color: var(--pp-muted);
+  line-height: 1.4;
+}
+
+/* Settings Select */
+.settingsSelect {
+  min-width: 140px;
+  padding: 8px 32px 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  color: var(--pp-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.settingsSelect:hover {
+  border-color: var(--pp-accent-border);
+  background-color: var(--pp-surface-strong);
+}
+
+.settingsSelect:focus {
+  outline: none;
+  border-color: var(--pp-accent);
+  box-shadow: 0 0 0 3px var(--pp-accent-soft);
+}
+
+/* Settings Toggle Switch */
+.settingsToggle {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.settingsToggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settingsToggleTrack {
+  width: 44px;
+  height: 26px;
+  background: var(--pp-border);
+  border-radius: 13px;
+  transition: background 0.2s ease;
+  position: relative;
+}
+
+.settingsToggleThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.settingsToggle input:checked + .settingsToggleTrack {
+  background: var(--pp-accent);
+}
+
+.settingsToggle input:checked + .settingsToggleTrack .settingsToggleThumb {
+  transform: translateX(18px);
+}
+
+.settingsToggle input:focus-visible + .settingsToggleTrack {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+}
+
+/* Theme Button Group */
+.settingsThemeGroup {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--pp-surface);
+  border-radius: 10px;
+  border: 1px solid var(--pp-border-weak);
+}
+
+.settingsThemeBtn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--pp-muted);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settingsThemeBtn:hover {
+  color: var(--pp-text);
+  background: var(--pp-surface-strong);
+}
+
+.settingsThemeBtn.active {
+  background: var(--pp-accent);
+  color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.settingsThemeBtn:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+}
+
+/* Provider List - New Design */
+.settingsProviderList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settingsProviderRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface);
+  transition: all 0.15s ease;
+}
+
+.settingsProviderRow:hover {
+  background: var(--pp-surface-strong);
+}
+
+.settingsProviderRow.connected {
+  border-color: var(--pp-accent-border);
+  background: var(--pp-accent-soft);
+}
+
+.settingsProviderIcon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--pp-surface-strong);
+  color: var(--pp-muted);
+}
+
+.settingsProviderIcon.icloud {
+  color: #3693F3;
+}
+
+.settingsProviderIcon.onedrive {
+  color: #0078D4;
+}
+
+.settingsProviderIcon.gdrive {
+  color: #4285F4;
+}
+
+.settingsProviderRow.connected .settingsProviderIcon {
+  background: white;
+}
+
+.settingsProviderInfo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settingsProviderName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--pp-text);
+}
+
+.settingsProviderAccount {
+  font-size: 12px;
+  color: var(--pp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settingsProviderBtn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface-strong);
+  color: var(--pp-text);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.settingsProviderBtn:hover {
+  background: var(--pp-accent-soft);
+  border-color: var(--pp-accent-border);
+  color: var(--pp-accent);
+}
+
+.settingsProviderBtn.connected {
+  background: var(--pp-accent);
+  border-color: var(--pp-accent);
+  color: white;
+}
+
+.settingsProviderBtn.connected:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.settingsProviderBtn:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+}
+
+/* Settings Errors & Warnings */
+.settingsError {
+  font-size: 12px;
+  color: var(--pp-danger-text);
+  padding: 4px 0 4px 28px;
+}
+
+.settingsWarning {
+  font-size: 12px;
+  color: #b45309;
+  padding: 4px 0 4px 28px;
+}
+
+html[data-theme="dark"] .settingsWarning {
+  color: #fbbf24;
+}
+
+/* Confirmation Dialog - Redesigned */
+.confirmDialogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 24px;
+}
+
+.confirmDialog {
+  width: min(380px, 90vw);
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--pp-surface-strong);
+  backdrop-filter: blur(var(--pp-blur-lg));
+  border: 1px solid var(--pp-border);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.confirmDialogHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: #f59e0b;
+}
+
+.confirmDialogTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--pp-text);
+}
+
+.confirmDialogMessage {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--pp-muted);
+}
+
+.confirmDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirmDialogBtn {
+  padding: 9px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.confirmDialogBtn.cancel {
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface);
+  color: var(--pp-text);
+}
+
+.confirmDialogBtn.cancel:hover {
+  background: var(--pp-surface-strong);
+}
+
+.confirmDialogBtn.danger {
+  border: none;
+  background: linear-gradient(180deg, #ef4444, #dc2626);
+  color: white;
+}
+
+.confirmDialogBtn.danger:hover {
+  background: linear-gradient(180deg, #dc2626, #b91c1c);
+}
+
+.confirmDialogBtn:focus-visible {
+  outline: 2px solid var(--pp-accent);
+  outline-offset: 2px;
+}
+
+/* Override hotkey recorder for settings context */
+.settingsModal .hotkeyRecorder {
+  min-width: 100px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.settingsModal .hotkeyPlaceholder {
+  font-size: 13px;
+}
+
+.settingsModal .hotkeyKeys {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+/* Provider List - Legacy support (keeping old classes for backward compat) */
+.providerList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.providerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--pp-border);
+  background: var(--pp-surface-strong);
+}
+
+.providerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.providerName {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--pp-text);
+}
+
+.providerAccount {
+  font-size: 12px;
+  color: var(--pp-muted);
+}
+
+.btnSmall {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.btnDanger {
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: linear-gradient(180deg, #ef4444, #dc2626);
+  color: white;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.btnDanger:hover {
+  background: linear-gradient(180deg, #dc2626, #b91c1c);
+}
+
+/* Small modal variant for confirmation dialogs */
+.modal.modalSmall {
+  max-width: 400px;
+}
+
+.modalBody {
+  padding: 16px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--pp-text);
+}
+
+.modalBody p {
+  margin: 0;
 }
 
 .modalFooter {
@@ -685,6 +1383,160 @@ body {
 .trayCardMeta {
   font-size: clamp(9px, 0.7vw, 12px);
   color: var(--pp-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   FLOATING MODE (Near Cursor) - Vertical Card Layout
+   Narrow popup with cards stacked vertically, appears below cursor
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.ui-mode-floating {
+  /* Compact popup with rounded corners */
+  border-radius: 12px;
+}
+
+/* Compact header in floating mode */
+.ui-mode-floating .topbar {
+  padding: 6px 8px;
+  gap: 4px;
+  min-height: auto;
+  border-bottom: 1px solid var(--pp-border-weak);
+}
+
+.ui-mode-floating .topbarCenter {
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ui-mode-floating .topbarCenter::-webkit-scrollbar {
+  display: none;
+}
+
+.ui-mode-floating .topbarIconBtn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.ui-mode-floating .topbarIconBtn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ui-mode-floating .topbarPinboard {
+  padding: 4px 8px;
+  font-size: 11px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ui-mode-floating .topbarPinboard svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ui-mode-floating .topbarSettings {
+  position: relative;
+  right: auto;
+  top: auto;
+  transform: none;
+}
+
+.ui-mode-floating .topbarStatus {
+  display: none; /* Hide sync status in compact mode */
+}
+
+.ui-mode-floating .searchInput {
+  font-size: 12px;
+  padding: 4px 8px;
+  max-width: 100px;
+}
+
+.ui-mode-floating .bottomTray {
+  /* Reset fixed positioning - fill remaining space in floating mode */
+  position: relative;
+  height: calc(100vh - 40px); /* Account for compact header */
+  border-top: none;
+  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ui-mode-floating .trayCards {
+  /* Switch to vertical layout */
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-padding-top: 8px;
+  height: 100%;
+  gap: 8px;
+  padding: 8px;
+}
+
+.ui-mode-floating .trayCard {
+  /* Full width cards in floating mode */
+  width: 100%;
+  /* Fixed height per card - compact */
+  height: auto;
+  min-height: 80px;
+  max-height: 120px;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+}
+
+.ui-mode-floating .trayCardTop {
+  padding: 4px 6px 4px 0;
+  margin-bottom: 4px;
+  gap: 6px;
+}
+
+.ui-mode-floating .trayCardAppIcon {
+  width: 28px;
+  height: 28px;
+  margin: -4px 0 -4px 0;
+}
+
+.ui-mode-floating .trayCardTitle {
+  font-size: 12px;
+}
+
+.ui-mode-floating .trayCopyBtn {
+  padding: 5px 8px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+
+.ui-mode-floating .trayCardBody {
+  gap: 4px;
+}
+
+.ui-mode-floating .trayCardText {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.ui-mode-floating .trayCardMeta {
+  font-size: 10px;
+}
+
+/* Floating mode scrollbar */
+.ui-mode-floating .trayCards::-webkit-scrollbar {
+  width: 6px;
+  height: auto;
+}
+
+.ui-mode-floating .trayCards::-webkit-scrollbar-track {
+  margin: 8px 0;
+}
+
+.ui-mode-floating .trayCards::-webkit-scrollbar-thumb {
+  min-height: 30px;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

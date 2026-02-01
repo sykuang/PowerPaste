@@ -1,27 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import {
   checkPermissions,
   deleteItem,
+  deleteItemForever,
+  emptyTrash,
   enableMouseEvents,
   getSettings,
+  getTrashCount,
   listPinboards,
   listItems,
+  listTrashedItems,
   openAccessibilitySettings,
   openAutomationSettings,
   pasteText,
   hideMainWindow,
+  restoreFromTrash,
   setItemPinboard,
   setItemPinned,
   setOverlayPreferredSize,
-  setHotkey,
-  setSyncSettings,
-  setUiMode,
   syncNow,
+  touchItem,
   writeClipboardText,
+  writeClipboardFiles,
   type ClipboardItem,
   type PermissionsStatus,
   type Settings,
@@ -112,6 +115,11 @@ function App() {
   const [editingPinboard, setEditingPinboard] = useState<string | null>(null); // pinboard being renamed
   const [editingPinboardName, setEditingPinboardName] = useState("");
   const [showIconPicker, setShowIconPicker] = useState<{ pinboard: string | null } | null>(null); // null = clipboard
+
+  // Trash view state
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashCount, setTrashCount] = useState(0);
+  const [showEmptyTrashConfirm, setShowEmptyTrashConfirm] = useState(false);
 
   // Show native context menu for pinboards
   const showPinboardContextMenu = useCallback(async (e: React.MouseEvent, pinboard: string | null) => {
@@ -212,17 +220,50 @@ function App() {
 
     let clearAfterMs = 1200;
     try {
-      const text = selectedItems.map((it) => it.text).join("\n\n");
-      await writeClipboardText(text);
+      // Check if we're copying a single file item
+      if (selectedItems.length === 1) {
+        const item = selectedItems[0];
+        if (item.kind === "file" || item.content_type === "file") {
+          // Copy file paths to clipboard
+          const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
+          await writeClipboardFiles(paths);
+          // Clipboard watcher will detect the file paths as text and move item to top
+        } else {
+          // Copy text to clipboard
+          // The clipboard watcher will automatically move the item to top
+          await writeClipboardText(item.text);
+        }
+      } else {
+        // Multiple items: check if all are files
+        const allFiles = selectedItems.every(
+          (it) => it.kind === "file" || it.content_type === "file"
+        );
+        
+        if (allFiles) {
+          // Collect all file paths and copy as files
+          const allPaths = selectedItems.flatMap((it) =>
+            (it.file_paths || it.text).split("\n").filter(Boolean)
+          );
+          await writeClipboardFiles(allPaths);
+        } else {
+          // Mixed or all text: join as text
+          // Clipboard watcher will create a new merged item automatically
+          const text = selectedItems.map((it) => it.text).join("\n\n");
+          await writeClipboardText(text);
+        }
+      }
+      
       setSyncStatus(
         selectedItems.length === 1
           ? "Copied selected item"
           : `Copied ${selectedItems.length} selected items`
       );
+      
+      // Hide UI after copy - the panel will reload when shown again
+      await hideMainWindow();
     } catch (err) {
       setSyncStatus(String(err));
       clearAfterMs = 5000;
-    } finally {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
   }, [selectedItems]);
@@ -287,6 +328,86 @@ function App() {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
   }, [selectedIds]);
+
+  // Restore items from trash
+  const handleRestore = useCallback(async (item: ClipboardItem) => {
+    let clearAfterMs = 1200;
+    try {
+      const itemsToRestore = selectedIds.has(item.id) && selectedIds.size > 0
+        ? Array.from(selectedIds)
+        : [item.id];
+
+      await Promise.all(itemsToRestore.map(id => restoreFromTrash(id)));
+      
+      const count = itemsToRestore.length;
+      setSyncStatus(count === 1 ? "Item restored" : `${count} items restored`);
+      
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        itemsToRestore.forEach(id => next.delete(id));
+        return next;
+      });
+      
+      await reload();
+    } catch (e) {
+      setSyncStatus(String(e));
+      clearAfterMs = 5000;
+    } finally {
+      setTimeout(() => setSyncStatus(""), clearAfterMs);
+    }
+  }, [selectedIds]);
+
+  // Delete items forever (permanent deletion)
+  const handleDeleteForever = useCallback(async (item: ClipboardItem) => {
+    let clearAfterMs = 1200;
+    try {
+      const itemsToDelete = selectedIds.has(item.id) && selectedIds.size > 0
+        ? Array.from(selectedIds)
+        : [item.id];
+
+      await Promise.all(itemsToDelete.map(id => deleteItemForever(id)));
+      
+      const count = itemsToDelete.length;
+      setSyncStatus(count === 1 ? "Item permanently deleted" : `${count} items permanently deleted`);
+      
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        itemsToDelete.forEach(id => next.delete(id));
+        return next;
+      });
+      
+      await reload();
+    } catch (e) {
+      setSyncStatus(String(e));
+      clearAfterMs = 5000;
+    } finally {
+      setTimeout(() => setSyncStatus(""), clearAfterMs);
+    }
+  }, [selectedIds]);
+
+  // Empty trash - show confirmation modal
+  const handleEmptyTrash = useCallback(() => {
+    if (trashCount === 0) return;
+    setShowEmptyTrashConfirm(true);
+  }, [trashCount]);
+
+  // Confirm empty trash
+  const confirmEmptyTrash = useCallback(async () => {
+    setShowEmptyTrashConfirm(false);
+    
+    let clearAfterMs = 1200;
+    try {
+      await emptyTrash();
+      setSyncStatus("Trash emptied");
+      setSelectedIds(new Set());
+      await reload();
+    } catch (e) {
+      setSyncStatus(String(e));
+      clearAfterMs = 5000;
+    } finally {
+      setTimeout(() => setSyncStatus(""), clearAfterMs);
+    }
+  }, []);
 
   const togglePinned = useCallback(
     async (item: ClipboardItem) => {
@@ -390,14 +511,23 @@ function App() {
   );
 
   async function reload() {
-    const [s, it, pbs] = await Promise.all([
+    const [s, pbs, tc] = await Promise.all([
       getSettings(),
-      listItems({ limit: 500, query: filteredQuery || undefined }),
       listPinboards(),
+      getTrashCount(),
     ]);
     setSettings(s);
-    setItems(it);
     setPinboards(pbs);
+    setTrashCount(tc);
+    
+    // Load items based on current view
+    if (showTrash) {
+      const result = await listTrashedItems({ limit: 500, offset: 0 });
+      setItems(result.items);
+    } else {
+      const it = await listItems({ limit: 500, query: filteredQuery || undefined });
+      setItems(it);
+    }
   }
 
   // Apply theme with system preference detection and live sync
@@ -494,7 +624,7 @@ function App() {
 
   useEffect(() => {
     void reload();
-  }, [filteredQuery]);
+  }, [filteredQuery, showTrash]);
 
   // Disable browser's default context menu on card elements (we use native Tauri menus)
   useEffect(() => {
@@ -718,7 +848,15 @@ function App() {
     console.log("[powerpaste] onCopy called for item:", item.id);
     let clearAfterMs = 1200;
     try {
-      await writeClipboardText(item.text);
+      // Check if this is a file item
+      if (item.kind === "file" || item.content_type === "file") {
+        const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
+        await writeClipboardFiles(paths);
+        // Clipboard watcher will detect the file paths as text and move item to top
+      } else {
+        // For text, clipboard watcher will automatically move the item to top
+        await writeClipboardText(item.text);
+      }
       setSyncStatus("Copied to clipboard");
       // Hide the UI after copying
       console.log("[powerpaste] onCopy: calling hideMainWindow");
@@ -726,7 +864,6 @@ function App() {
     } catch (e) {
       setSyncStatus(String(e));
       clearAfterMs = 5000;
-    } finally {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
   }
@@ -761,12 +898,6 @@ function App() {
     } finally {
       setTimeout(() => setSyncStatus(""), 2500);
     }
-  }
-
-  async function pickFolder() {
-    const result = await open({ directory: true, multiple: false });
-    if (typeof result === "string") return result;
-    return null;
   }
 
   async function openSettingsWindow() {
@@ -838,20 +969,11 @@ function App() {
             onClose={() => void closeCurrentWindow()}
             closeOnBackdrop={false}
             platform={permissions?.platform ?? "unknown"}
-            onSave={async (next) => {
-              const updatedHotkey = await setHotkey(next.hotkey);
-              const updatedUiMode = await setUiMode(next.uiMode);
-              const updated = await setSyncSettings({
-                enabled: next.enabled,
-                provider: next.provider,
-                folder: next.folder,
-                passphrase: next.passphrase,
-                theme: next.theme,
-              });
-              setSettings({ ...updated, hotkey: updatedHotkey.hotkey, ui_mode: updatedUiMode.ui_mode });
-              await closeCurrentWindow();
-            }}
-            onPickFolder={pickFolder}
+            connectedProviders={settings.connected_providers?.map((p) => ({
+              provider: p.provider,
+              accountEmail: p.account_email,
+              accountId: p.account_id,
+            })) ?? []}
           />
         ) : (
           <div className="status">Loading settings…</div>
@@ -860,11 +982,15 @@ function App() {
     );
   }
 
+  // Compute app class based on UI mode
+  const uiMode = settings?.ui_mode ?? "floating";
+  const appClasses = ["app", `ui-mode-${uiMode}`].join(" ");
+
   return (
-    <div className="app">
+    <div className={appClasses}>
       <header className="topbar">
         {/* All controls centered together */}
-        <div className="topbarCenter" role="tablist" aria-label="Pinboards">
+        <div className={`topbarCenter${searchExpanded ? " searchExpanded" : ""}`} role="tablist" aria-label="Pinboards">
           {/* Search */}
           {!searchExpanded ? (
             <div
@@ -930,26 +1056,32 @@ function App() {
 
           {/* Clipboard History tab */}
           <button 
-            className={`topbarPinboard${activePinboard === null ? " isActive" : ""}`}
+            className={`topbarPinboard${activePinboard === null && !showTrash ? " isActive" : ""}`}
             role="tab" 
-            aria-selected={activePinboard === null}
+            aria-selected={activePinboard === null && !showTrash}
             type="button"
-            onClick={() => setActivePinboard(null)}
+            onClick={() => {
+              setActivePinboard(null);
+              setShowTrash(false);
+            }}
             onContextMenu={(e) => void showPinboardContextMenu(e, null)}
           >
             <PinboardIcon iconKey={clipboardIcon} />
-            Clipboard History
+            <span className="pinboardLabel">Clipboard History</span>
           </button>
 
           {/* Custom pinboards */}
           {pinboards.map((pb) => (
             <button
               key={pb}
-              className={`topbarPinboard${activePinboard === pb ? " isActive" : ""}`}
+              className={`topbarPinboard${activePinboard === pb && !showTrash ? " isActive" : ""}`}
               role="tab"
-              aria-selected={activePinboard === pb}
+              aria-selected={activePinboard === pb && !showTrash}
               type="button"
-              onClick={() => setActivePinboard(pb)}
+              onClick={() => {
+                setActivePinboard(pb);
+                setShowTrash(false);
+              }}
               onContextMenu={(e) => void showPinboardContextMenu(e, pb)}
             >
               <PinboardIcon iconKey={pinboardIcons[pb] || "dot"} />
@@ -986,7 +1118,7 @@ function App() {
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                pb
+                <span className="pinboardLabel">{pb}</span>
               )}
             </button>
           ))}
@@ -1007,7 +1139,36 @@ function App() {
               <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </div>
+
+          {/* Trash toggle button */}
+          {settings?.trash_enabled && (
+            <div
+              className={`topbarIconBtn topbarTrash${showTrash ? " isActive" : ""}`}
+              role="button"
+              aria-label={showTrash ? "Exit Trash" : "View Trash"}
+              title={showTrash ? "Exit Trash" : `Trash (${trashCount})`}
+              tabIndex={0}
+              onClick={() => {
+                setShowTrash(!showTrash);
+                setActivePinboard(null); // Reset pinboard when toggling trash
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 4h12M5.5 4V2.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V4M6 7v5M10 7v5M3.5 4l.5 9.5a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1L12.5 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+          )}
         </div>
+
+        {/* Empty Trash button - shown when in trash view, positioned on the right */}
+        {showTrash && trashCount > 0 && (
+          <button
+            className="btn btnDanger btnSmall topbarEmptyTrash"
+            onClick={handleEmptyTrash}
+          >
+            Empty Trash
+          </button>
+        )}
 
         {/* More menu button */}
         <div
@@ -1045,6 +1206,8 @@ function App() {
         selectedIds={selectedIds}
         pinboards={pinboards}
         activePinboard={activePinboard}
+        isTrashView={showTrash}
+        uiMode={uiMode}
         onPinboardChange={setActivePinboard}
         onSelect={selectItem}
         onCopy={onCopy}
@@ -1053,6 +1216,9 @@ function App() {
         onTogglePin={togglePinned}
         onSaveToPinboard={(item) => setSaveToPinboardItem(item)}
         onRemoveFromPinboard={handleRemoveFromPinboard}
+        onRestore={handleRestore}
+        onDeleteForever={handleDeleteForever}
+        onEmptyTrash={handleEmptyTrash}
       />
 
       {/* Save to Pinboard Modal */}
@@ -1103,6 +1269,29 @@ function App() {
                 disabled={!newPinboardName.trim()}
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Empty Trash Confirmation Modal */}
+      {showEmptyTrashConfirm && (
+        <div className="modalBackdrop" onClick={() => setShowEmptyTrashConfirm(false)}>
+          <div className="modal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <h3>Empty Trash?</h3>
+            <p className="confirmMessage">
+              Are you sure you want to permanently delete {trashCount} item{trashCount !== 1 ? 's' : ''}? This cannot be undone.
+            </p>
+            <div className="modalActions">
+              <button className="btn" onClick={() => setShowEmptyTrashConfirm(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btnDanger"
+                onClick={() => void confirmEmptyTrash()}
+              >
+                Empty Trash
               </button>
             </div>
           </div>

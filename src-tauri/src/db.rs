@@ -94,8 +94,9 @@ pub fn insert_text_with_source_app(
     let now = now_ms();
 
     // Check if this exact text already exists anywhere in the clipboard
+    // Also check for file items since file paths can be read as text by arboard
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id FROM clipboard_items WHERE kind = 'text' AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE (kind = 'text' OR kind = 'file' OR content_type = 'file') AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -144,6 +145,8 @@ pub fn insert_text_with_source_app(
         content_type: content_type.clone(),
         source_app_name: source_app_name.clone(),
         source_app_bundle_id: source_app_bundle_id.clone(),
+        is_trashed: None,
+        deleted_at_ms: None,
     };
 
     conn.execute(
@@ -188,7 +191,7 @@ pub fn insert_image_with_source_app(
     
     // Check if we already have this image anywhere (by hash stored in text field)
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -241,6 +244,8 @@ pub fn insert_image_with_source_app(
         content_type: Some("image".to_string()),
         source_app_name: source_app_name.clone(),
         source_app_bundle_id: source_app_bundle_id.clone(),
+        is_trashed: None,
+        deleted_at_ms: None,
     };
 
     conn.execute(
@@ -264,6 +269,22 @@ pub fn insert_image_with_source_app(
     .map_err(|e| format!("failed to insert image: {e}"))?;
 
     Ok(Some(item))
+}
+
+/// Move an item to the top of the list by updating its created_at_ms to now.
+/// Returns true if the item was found and updated, false otherwise.
+pub fn touch_item(app: &tauri::AppHandle, id: Uuid) -> Result<bool, String> {
+    let conn = open(app)?;
+    let now = now_ms();
+    
+    let rows_affected = conn
+        .execute(
+            "UPDATE clipboard_items SET created_at_ms = ?1 WHERE id = ?2 AND is_trashed = 0",
+            params![now, id.to_string()],
+        )
+        .map_err(|e| format!("failed to touch item: {e}"))?;
+    
+    Ok(rows_affected > 0)
 }
 
 /// Convert raw RGBA bytes to PNG format
@@ -340,6 +361,8 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
         content_type: row.get(10)?,
         source_app_name: row.get(11)?,
         source_app_bundle_id: row.get(12)?,
+        is_trashed: row.get::<_, Option<i64>>(13)?.map(|v| v != 0),
+        deleted_at_ms: row.get(14)?,
     })
 }
 
@@ -349,7 +372,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
 
     let mut items = Vec::new();
     
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
         let q = format!("%{}%", q.trim());
@@ -357,7 +380,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
             .prepare(&format!(
                 "SELECT {} \
                  FROM clipboard_items \
-                 WHERE text LIKE ?1 OR content_type LIKE ?1 \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
                  ORDER BY pinned DESC, created_at_ms DESC \
                  LIMIT ?2",
                 base_cols
@@ -377,6 +400,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
         .prepare(&format!(
             "SELECT {} \
              FROM clipboard_items \
+             WHERE is_trashed IS NULL OR is_trashed = 0 \
              ORDER BY pinned DESC, created_at_ms DESC \
              LIMIT ?1",
             base_cols
@@ -468,6 +492,298 @@ pub fn delete_item(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
     conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id.to_string()])
         .map_err(|e| format!("failed to delete item: {e}"))?;
     Ok(())
+}
+
+/// Move an item to trash (soft delete)
+pub fn trash_item(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
+    let conn = open(app)?;
+    let now = now_ms();
+    conn.execute(
+        "UPDATE clipboard_items SET is_trashed = 1, deleted_at_ms = ?1 WHERE id = ?2",
+        params![now, id.to_string()],
+    )
+    .map_err(|e| format!("failed to trash item: {e}"))?;
+    Ok(())
+}
+
+/// Restore an item from trash
+pub fn restore_from_trash(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute(
+        "UPDATE clipboard_items SET is_trashed = 0, deleted_at_ms = NULL WHERE id = ?1",
+        params![id.to_string()],
+    )
+    .map_err(|e| format!("failed to restore item: {e}"))?;
+    Ok(())
+}
+
+/// Permanently delete an item (bypass trash)
+pub fn delete_item_forever(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id.to_string()])
+        .map_err(|e| format!("failed to delete item forever: {e}"))?;
+    Ok(())
+}
+
+/// Empty the trash (permanently delete all trashed items)
+pub fn empty_trash(app: &tauri::AppHandle) -> Result<u32, String> {
+    let conn = open(app)?;
+    let deleted = conn
+        .execute("DELETE FROM clipboard_items WHERE is_trashed = 1", [])
+        .map_err(|e| format!("failed to empty trash: {e}"))?;
+    Ok(deleted as u32)
+}
+
+/// Get count of items in trash
+pub fn get_trash_count(app: &tauri::AppHandle) -> Result<u32, String> {
+    let conn = open(app)?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE is_trashed = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to count trash: {e}"))?;
+    Ok(count as u32)
+}
+
+/// List trashed items with pagination
+pub fn list_trashed_items(app: &tauri::AppHandle, limit: u32, offset: u32) -> Result<(Vec<ClipboardItem>, u32), String> {
+    let conn = open(app)?;
+    let limit = limit.clamp(1, 100) as i64;
+    let offset = offset as i64;
+
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+
+    // Get total count
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE is_trashed = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to count trashed items: {e}"))?;
+
+    let mut items = Vec::new();
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} \
+             FROM clipboard_items \
+             WHERE is_trashed = 1 \
+             ORDER BY deleted_at_ms DESC \
+             LIMIT ?1 OFFSET ?2",
+            base_cols
+        ))
+        .map_err(|e| format!("failed to prepare trashed query: {e}"))?;
+    
+    let rows = stmt
+        .query_map(params![limit, offset], row_to_item)
+        .map_err(|e| format!("failed to query trashed items: {e}"))?;
+
+    for r in rows {
+        items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+    }
+
+    Ok((items, total as u32))
+}
+
+/// List items with pagination (excludes trashed)
+pub fn list_items_paginated(
+    app: &tauri::AppHandle,
+    limit: u32,
+    offset: u32,
+    query: Option<String>,
+) -> Result<(Vec<ClipboardItem>, u32), String> {
+    let conn = open(app)?;
+    let limit = limit.clamp(1, 100) as i64;
+    let offset = offset as i64;
+
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+
+    let mut items = Vec::new();
+
+    if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
+        let q = format!("%{}%", q.trim());
+        
+        // Get total count for search
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1)",
+                params![q],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to count items: {e}"))?;
+
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {} \
+                 FROM clipboard_items \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
+                 ORDER BY pinned DESC, created_at_ms DESC \
+                 LIMIT ?2 OFFSET ?3",
+                base_cols
+            ))
+            .map_err(|e| format!("failed to prepare paginated query: {e}"))?;
+        
+        let rows = stmt
+            .query_map(params![q, limit, offset], row_to_item)
+            .map_err(|e| format!("failed to query items: {e}"))?;
+
+        for r in rows {
+            items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+        }
+        return Ok((items, total as u32));
+    }
+
+    // Get total count
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE is_trashed IS NULL OR is_trashed = 0",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to count items: {e}"))?;
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} \
+             FROM clipboard_items \
+             WHERE is_trashed IS NULL OR is_trashed = 0 \
+             ORDER BY pinned DESC, created_at_ms DESC \
+             LIMIT ?1 OFFSET ?2",
+            base_cols
+        ))
+        .map_err(|e| format!("failed to prepare paginated query: {e}"))?;
+    
+    let rows = stmt
+        .query_map(params![limit, offset], row_to_item)
+        .map_err(|e| format!("failed to query items: {e}"))?;
+
+    for r in rows {
+        items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+    }
+
+    Ok((items, total as u32))
+}
+
+/// List pinboard items with pagination
+pub fn list_pinboard_items_paginated(
+    app: &tauri::AppHandle,
+    limit: u32,
+    offset: u32,
+    pinboard: Option<String>,
+) -> Result<(Vec<ClipboardItem>, u32), String> {
+    let conn = open(app)?;
+    let limit = limit.clamp(1, 100) as i64;
+    let offset = offset as i64;
+
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+
+    let mut items = Vec::new();
+
+    if let Some(pb) = pinboard.filter(|s| !s.trim().is_empty()) {
+        // Get total count for specific pinboard
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinboard = ?1",
+                params![pb],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to count pinboard items: {e}"))?;
+
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {} \
+                 FROM clipboard_items \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinboard = ?1 \
+                 ORDER BY created_at_ms DESC \
+                 LIMIT ?2 OFFSET ?3",
+                base_cols
+            ))
+            .map_err(|e| format!("failed to prepare pinboard query: {e}"))?;
+        
+        let rows = stmt
+            .query_map(params![pb, limit, offset], row_to_item)
+            .map_err(|e| format!("failed to query pinboard items: {e}"))?;
+
+        for r in rows {
+            items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+        }
+        return Ok((items, total as u32));
+    }
+
+    // Get all pinned items (all pinboards)
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clipboard_items WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinned = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to count pinned items: {e}"))?;
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} \
+             FROM clipboard_items \
+             WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinned = 1 \
+             ORDER BY created_at_ms DESC \
+             LIMIT ?1 OFFSET ?2",
+            base_cols
+        ))
+        .map_err(|e| format!("failed to prepare pinned query: {e}"))?;
+    
+    let rows = stmt
+        .query_map(params![limit, offset], row_to_item)
+        .map_err(|e| format!("failed to query pinned items: {e}"))?;
+
+    for r in rows {
+        items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+    }
+
+    Ok((items, total as u32))
+}
+
+/// Clean up items older than retention period (move to trash if enabled, or delete)
+pub fn cleanup_old_items(app: &tauri::AppHandle, retention_days: i32, trash_enabled: bool) -> Result<u32, String> {
+    let conn = open(app)?;
+    let cutoff_ms = now_ms() - (retention_days as i64 * 24 * 60 * 60 * 1000);
+
+    if trash_enabled {
+        // Move old items to trash
+        let now = now_ms();
+        let affected = conn
+            .execute(
+                "UPDATE clipboard_items SET is_trashed = 1, deleted_at_ms = ?1 \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinned = 0 AND created_at_ms < ?2",
+                params![now, cutoff_ms],
+            )
+            .map_err(|e| format!("failed to trash old items: {e}"))?;
+        Ok(affected as u32)
+    } else {
+        // Permanently delete old items
+        let affected = conn
+            .execute(
+                "DELETE FROM clipboard_items \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND pinned = 0 AND created_at_ms < ?1",
+                params![cutoff_ms],
+            )
+            .map_err(|e| format!("failed to delete old items: {e}"))?;
+        Ok(affected as u32)
+    }
+}
+
+/// Clean up trashed items older than trash retention period
+pub fn cleanup_old_trash(app: &tauri::AppHandle, trash_retention_days: i32) -> Result<u32, String> {
+    let conn = open(app)?;
+    let cutoff_ms = now_ms() - (trash_retention_days as i64 * 24 * 60 * 60 * 1000);
+
+    let affected = conn
+        .execute(
+            "DELETE FROM clipboard_items WHERE is_trashed = 1 AND deleted_at_ms < ?1",
+            params![cutoff_ms],
+        )
+        .map_err(|e| format!("failed to cleanup old trash: {e}"))?;
+    Ok(affected as u32)
 }
 
 // Needed for rusqlite::OptionalExtension.

@@ -9,6 +9,7 @@ interface TrayCardProps {
   item: ClipboardItem;
   isSelected: boolean;
   selectedCount: number;
+  isTrashView: boolean;
   onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
   onCopy: (item: ClipboardItem) => void;
   onPaste: (item: ClipboardItem) => void;
@@ -16,36 +17,67 @@ interface TrayCardProps {
   onTogglePin: (item: ClipboardItem) => void;
   onSaveToPinboard: (item: ClipboardItem) => void;
   onRemoveFromPinboard: (item: ClipboardItem) => void;
+  onRestore?: (item: ClipboardItem) => void;
+  onDeleteForever?: (item: ClipboardItem) => void;
 }
 
-function TrayCard({ item, isSelected, selectedCount, onSelect, onCopy, onPaste, onDelete, onTogglePin, onSaveToPinboard, onRemoveFromPinboard }: TrayCardProps) {
+function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCopy, onPaste, onDelete, onTogglePin, onSaveToPinboard, onRemoveFromPinboard, onRestore, onDeleteForever }: TrayCardProps) {
   const [titleColor, setTitleColor] = useState<string | null>(null);
   // Show native context menu for card
   const showCardContextMenu = async (x: number, y: number) => {
-    const deleteLabel = isSelected && selectedCount > 1 
-      ? `Delete ${selectedCount} items` 
-      : "Delete";
+    const menuItems: (MenuItem | PredefinedMenuItem)[] = [];
 
-    const menuItems = [
-      await MenuItem.new({ text: "Copy", action: () => onCopy(item) }),
-      await MenuItem.new({ text: "Paste", action: () => onPaste(item) }),
-      await PredefinedMenuItem.new({ item: "Separator" }),
-      await MenuItem.new({ 
-        text: item.pinned ? "Unpin" : "Pin", 
-        action: () => onTogglePin(item) 
-      }),
-      item.pinboard
-        ? await MenuItem.new({ 
+    if (isTrashView) {
+      // Trash view: show Restore and Delete Forever
+      const restoreLabel = isSelected && selectedCount > 1
+        ? `Restore ${selectedCount} items`
+        : "Restore";
+      const deleteForeverLabel = isSelected && selectedCount > 1
+        ? `Delete ${selectedCount} items forever`
+        : "Delete forever";
+
+      menuItems.push(
+        await MenuItem.new({ text: restoreLabel, action: () => onRestore?.(item) }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({ text: deleteForeverLabel, action: () => onDeleteForever?.(item) }),
+      );
+    } else {
+      // Normal view: show standard actions
+      const deleteLabel = isSelected && selectedCount > 1 
+        ? `Delete ${selectedCount} items` 
+        : "Delete";
+
+      menuItems.push(
+        await MenuItem.new({ text: "Copy", action: () => onCopy(item) }),
+        await MenuItem.new({ text: "Paste", action: () => onPaste(item) }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({ 
+          text: item.pinned ? "Unpin" : "Pin", 
+          action: () => onTogglePin(item) 
+        }),
+      );
+      
+      if (item.pinboard) {
+        menuItems.push(
+          await MenuItem.new({ 
             text: "Remove from pinboard", 
             action: () => onRemoveFromPinboard(item) 
           })
-        : await MenuItem.new({ 
+        );
+      } else {
+        menuItems.push(
+          await MenuItem.new({ 
             text: "Save to pinboard...", 
             action: () => onSaveToPinboard(item) 
-          }),
-      await PredefinedMenuItem.new({ item: "Separator" }),
-      await MenuItem.new({ text: deleteLabel, action: () => onDelete(item) }),
-    ];
+          })
+        );
+      }
+      
+      menuItems.push(
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({ text: deleteLabel, action: () => onDelete(item) }),
+      );
+    }
 
     const menu = await Menu.new({ items: menuItems });
     await menu.popup(new LogicalPosition(x, y));
@@ -176,6 +208,7 @@ interface BottomTrayProps {
   selectedIds: Set<string>;
   pinboards: string[];
   activePinboard: string | null; // null = Clipboard
+  isTrashView: boolean;
   onPinboardChange: (pinboard: string | null) => void;
   onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
   onCopy: (item: ClipboardItem) => void;
@@ -184,13 +217,21 @@ interface BottomTrayProps {
   onTogglePin: (item: ClipboardItem) => void;
   onSaveToPinboard: (item: ClipboardItem) => void;
   onRemoveFromPinboard: (item: ClipboardItem) => void;
+  onRestore?: (item: ClipboardItem) => void;
+  onDeleteForever?: (item: ClipboardItem) => void;
+  onEmptyTrash?: () => void;
+  uiMode?: "floating" | "fixed";
 }
 
 export function BottomTray(props: BottomTrayProps) {
   const trayCardsRef = useRef<HTMLDivElement>(null);
+  const isFloating = props.uiMode === "floating";
 
-  // Convert vertical mouse wheel to horizontal scroll
+  // Convert vertical mouse wheel to horizontal scroll (only in fixed mode)
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    // In floating mode, let vertical scroll work naturally
+    if (isFloating) return;
+    
     const container = trayCardsRef.current;
     if (!container) return;
     
@@ -202,7 +243,7 @@ export function BottomTray(props: BottomTrayProps) {
       e.preventDefault();
       container.scrollLeft += e.deltaY;
     }
-  }, []);
+  }, [isFloating]);
 
   return (
     <div className="bottomTray" role="region" aria-label="Quick copy tray">
@@ -218,6 +259,7 @@ export function BottomTray(props: BottomTrayProps) {
             item={item}
             isSelected={props.selectedIds.has(item.id)}
             selectedCount={props.selectedIds.size}
+            isTrashView={props.isTrashView}
             onSelect={props.onSelect}
             onCopy={props.onCopy}
             onPaste={props.onPaste}
@@ -225,6 +267,8 @@ export function BottomTray(props: BottomTrayProps) {
             onTogglePin={props.onTogglePin}
             onSaveToPinboard={props.onSaveToPinboard}
             onRemoveFromPinboard={props.onRemoveFromPinboard}
+            onRestore={props.onRestore}
+            onDeleteForever={props.onDeleteForever}
           />
         ))}
       </div>
