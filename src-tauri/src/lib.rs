@@ -1341,8 +1341,8 @@ fn toggle_nspanel_overlay(
                 .to_panel::<PowerPastePanel>()
                 .map_err(|e| format!("failed to convert window to panel: {e}"))?;
             
-            // Configure panel
-            panel.set_level(PanelLevel::Floating.value());
+            // Configure panel - use ScreenSaver level to appear above Dock
+            panel.set_level(PanelLevel::ScreenSaver.value());
             panel.set_hides_on_deactivate(false);
             panel.set_works_when_modal(true);
             

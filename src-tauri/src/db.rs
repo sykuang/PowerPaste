@@ -66,7 +66,8 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Insert a text item with optional content type detection
+/// Insert a text item with optional content type detection.
+/// If an item with the same text already exists, move it to the top by updating its timestamp.
 pub fn insert_text_if_new_with_type(
     app: &tauri::AppHandle,
     text: &str,
@@ -78,27 +79,50 @@ pub fn insert_text_if_new_with_type(
     }
 
     let conn = open(app)?;
+    let now = now_ms();
 
-    // Skip duplicates of the most recent entry.
+    // Check if this exact text already exists anywhere in the clipboard
     let mut stmt = conn
-        .prepare("SELECT text FROM clipboard_items ORDER BY created_at_ms DESC LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type FROM clipboard_items WHERE kind = 'text' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
-    let last: Option<String> = stmt
-        .query_row([], |row| row.get(0))
+    
+    let existing: Option<ClipboardItem> = stmt
+        .query_row(params![text], row_to_item)
         .optional()
-        .map_err(|e| format!("failed to read last item: {e}"))?;
+        .map_err(|e| format!("failed to check existing item: {e}"))?;
 
-    if let Some(last) = last {
-        if last == text {
+    if let Some(mut existing_item) = existing {
+        // Item already exists - check if it's already the most recent
+        let mut latest_stmt = conn
+            .prepare("SELECT created_at_ms FROM clipboard_items ORDER BY created_at_ms DESC LIMIT 1")
+            .map_err(|e| format!("failed to prepare latest query: {e}"))?;
+        let latest_time: Option<i64> = latest_stmt
+            .query_row([], |row| row.get(0))
+            .optional()
+            .map_err(|e| format!("failed to get latest time: {e}"))?;
+
+        if latest_time == Some(existing_item.created_at_ms) {
+            // Already the most recent item, no change needed
             return Ok(None);
         }
+
+        // Move the existing item to the top by updating its timestamp
+        conn.execute(
+            "UPDATE clipboard_items SET created_at_ms = ?1 WHERE id = ?2",
+            params![now, existing_item.id.to_string()],
+        )
+        .map_err(|e| format!("failed to update item timestamp: {e}"))?;
+
+        existing_item.created_at_ms = now;
+        return Ok(Some(existing_item));
     }
 
+    // No existing item found, create a new one
     let item = ClipboardItem {
         id: Uuid::new_v4(),
         kind: ClipboardItemKind::Text,
         text: text.to_string(),
-        created_at_ms: now_ms(),
+        created_at_ms: now,
         pinned: false,
         pinboard: None,
         image_width: None,
@@ -121,7 +145,8 @@ pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<C
     insert_text_if_new_with_type(app, text, None)
 }
 
-/// Insert an image item from raw RGBA bytes
+/// Insert an image item from raw RGBA bytes.
+/// If an image with the same hash already exists, move it to the top by updating its timestamp.
 pub fn insert_image_if_new(
     app: &tauri::AppHandle,
     image_data: &[u8],
@@ -129,28 +154,49 @@ pub fn insert_image_if_new(
     height: u32,
 ) -> Result<Option<ClipboardItem>, String> {
     let conn = open(app)?;
+    let now = now_ms();
 
     // Generate a simple hash of first 1KB for dedup check
     let hash_sample: Vec<u8> = image_data.iter().take(1024).copied().collect();
     let hash_str = format!("{:x}", md5_hash(&hash_sample));
     
-    // Check if we already have this image (by checking recent image items)
+    // Check if we already have this image anywhere (by hash stored in text field)
     let mut stmt = conn
-        .prepare("SELECT text FROM clipboard_items WHERE kind = 'image' ORDER BY created_at_ms DESC LIMIT 5")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("failed to query: {e}"))?;
-    
-    for r in rows {
-        if let Ok(stored_hash) = r {
-            if stored_hash == hash_str {
-                return Ok(None); // Duplicate image
-            }
+    let existing: Option<ClipboardItem> = stmt
+        .query_row(params![hash_str], row_to_item)
+        .optional()
+        .map_err(|e| format!("failed to check existing image: {e}"))?;
+
+    if let Some(mut existing_item) = existing {
+        // Image already exists - check if it's already the most recent
+        let mut latest_stmt = conn
+            .prepare("SELECT created_at_ms FROM clipboard_items ORDER BY created_at_ms DESC LIMIT 1")
+            .map_err(|e| format!("failed to prepare latest query: {e}"))?;
+        let latest_time: Option<i64> = latest_stmt
+            .query_row([], |row| row.get(0))
+            .optional()
+            .map_err(|e| format!("failed to get latest time: {e}"))?;
+
+        if latest_time == Some(existing_item.created_at_ms) {
+            // Already the most recent item, no change needed
+            return Ok(None);
         }
+
+        // Move the existing item to the top by updating its timestamp
+        conn.execute(
+            "UPDATE clipboard_items SET created_at_ms = ?1 WHERE id = ?2",
+            params![now, existing_item.id.to_string()],
+        )
+        .map_err(|e| format!("failed to update image timestamp: {e}"))?;
+
+        existing_item.created_at_ms = now;
+        return Ok(Some(existing_item));
     }
 
+    // No existing image found, create a new one
     // Convert RGBA bytes to PNG
     let png_data = rgba_to_png(image_data, width, height)?;
     let size_bytes = png_data.len() as u64;
@@ -159,7 +205,7 @@ pub fn insert_image_if_new(
         id: Uuid::new_v4(),
         kind: ClipboardItemKind::Image,
         text: hash_str.clone(), // Store hash as text for dedup
-        created_at_ms: now_ms(),
+        created_at_ms: now,
         pinned: false,
         pinboard: None,
         image_width: Some(width),
