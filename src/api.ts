@@ -43,6 +43,10 @@ export type ClipboardItem = {
   file_paths?: string;
   /** Content type hint for preview: "url", "image", "file", or null for plain text */
   content_type?: string;
+  /** Name of the app that was frontmost when this item was copied */
+  source_app_name?: string;
+  /** Bundle ID of the source app (e.g., "com.apple.Safari") */
+  source_app_bundle_id?: string;
 };
 
 export type PermissionsStatus = {
@@ -165,4 +169,8 @@ export async function enableMouseEvents(): Promise<void> {
 
 export async function setShowDockIcon(show: boolean): Promise<Settings> {
   return invoke("set_show_dock_icon", { show });
+}
+/** Get the file system path to an app's icon by its bundle ID */
+export async function getAppIconPath(bundleId: string): Promise<string | null> {
+  return invoke("get_app_icon_path", { bundleId });
 }

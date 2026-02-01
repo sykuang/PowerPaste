@@ -27,6 +27,12 @@ pub struct ClipboardItem {
     /// Content type hint for preview: "url", "image", "file", or null for plain text
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    /// Name of the app that was frontmost when this item was copied
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_app_name: Option<String>,
+    /// Bundle ID of the source app (e.g., "com.apple.Safari")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_app_bundle_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -181,6 +181,39 @@ fn macos_query_frontmost_app_name() -> Option<String> {
     }
 }
 
+/// Query the bundle identifier of the frontmost application.
+#[cfg(target_os = "macos")]
+pub fn macos_query_frontmost_app_bundle_id() -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let bundle_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if bundle_id.is_empty() {
+        None
+    } else {
+        Some(bundle_id)
+    }
+}
+
+/// Query both name and bundle ID of the frontmost application.
+#[cfg(target_os = "macos")]
+pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
+    (macos_query_frontmost_app_name(), macos_query_frontmost_app_bundle_id())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
+    (None, None)
+}
+
 #[cfg(target_os = "macos")]
 fn macos_get_cursor_position() -> Option<(f64, f64)> {
     use objc2_app_kit::NSEvent;
@@ -912,6 +945,114 @@ fn enable_mouse_events(window: tauri::WebviewWindow) -> Result<(), String> {
         ns_window.setIgnoresMouseEvents(false);
     }
     Ok(())
+}
+
+/// Get the icon path for an application by its bundle ID.
+/// Returns the path to a PNG version of the app's icon that can be displayed in webview.
+#[tauri::command]
+fn get_app_icon_path(app: tauri::AppHandle, bundle_id: String) -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        
+        // Get the app data directory for caching converted icons
+        let cache_dir = crate::paths::app_data_dir(&app)
+            .map_err(|e| format!("failed to get app data dir: {e}"))?
+            .join("icon_cache");
+        
+        // Create cache directory if it doesn't exist
+        std::fs::create_dir_all(&cache_dir)
+            .map_err(|e| format!("failed to create icon cache dir: {e}"))?;
+        
+        // Check if we have a cached PNG for this bundle ID
+        let safe_bundle_id = bundle_id.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+        let cached_png = cache_dir.join(format!("{}.png", safe_bundle_id));
+        
+        if cached_png.exists() {
+            return Ok(Some(cached_png.to_string_lossy().to_string()));
+        }
+        
+        // Use mdfind to locate the app by bundle ID
+        let output = Command::new("mdfind")
+            .args([&format!("kMDItemCFBundleIdentifier == '{}'", bundle_id)])
+            .output()
+            .map_err(|e| format!("failed to run mdfind: {e}"))?;
+        
+        if !output.status.success() {
+            return Ok(None);
+        }
+        
+        let path = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(|s| s.to_string());
+        
+        if let Some(app_path) = path {
+            // Get the icon file from the app bundle
+            // First, try to read Info.plist to get CFBundleIconFile
+            let plist_path = format!("{}/Contents/Info.plist", app_path);
+            
+            // Use defaults read to get the icon file name
+            let icon_output = Command::new("defaults")
+                .args(["read", &plist_path, "CFBundleIconFile"])
+                .output();
+            
+            let mut icns_path: Option<String> = None;
+            
+            if let Ok(icon_out) = icon_output {
+                if icon_out.status.success() {
+                    let mut icon_name = String::from_utf8_lossy(&icon_out.stdout).trim().to_string();
+                    // Add .icns extension if not present
+                    if !icon_name.ends_with(".icns") {
+                        icon_name.push_str(".icns");
+                    }
+                    let icon_path = format!("{}/Contents/Resources/{}", app_path, icon_name);
+                    if std::path::Path::new(&icon_path).exists() {
+                        icns_path = Some(icon_path);
+                    }
+                }
+            }
+            
+            // Fallback: try common icon names
+            if icns_path.is_none() {
+                let fallbacks = ["AppIcon.icns", "app.icns", "icon.icns"];
+                for fallback in fallbacks {
+                    let icon_path = format!("{}/Contents/Resources/{}", app_path, fallback);
+                    if std::path::Path::new(&icon_path).exists() {
+                        icns_path = Some(icon_path);
+                        break;
+                    }
+                }
+            }
+            
+            // Convert .icns to PNG using sips
+            if let Some(icns) = icns_path {
+                let sips_result = Command::new("sips")
+                    .args([
+                        "-s", "format", "png",
+                        "-z", "64", "64",  // Resize to 64x64 for web
+                        &icns,
+                        "--out", &cached_png.to_string_lossy()
+                    ])
+                    .output();
+                
+                if let Ok(sips_out) = sips_result {
+                    if sips_out.status.success() && cached_png.exists() {
+                        return Ok(Some(cached_png.to_string_lossy().to_string()));
+                    }
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = bundle_id;
+        Ok(None)
+    }
 }
 
 #[tauri::command]
@@ -2599,6 +2740,7 @@ pub fn run() {
             set_ui_mode,
             list_items,
             get_image_data,
+            get_app_icon_path,
             set_overlay_preferred_size,
             hide_main_window,
             set_item_pinned,

@@ -562,14 +562,37 @@ body {
   justify-content: space-between;
   gap: clamp(6px, 0.6vw, 10px);
   margin-bottom: clamp(4px, 0.5vw, 8px);
+  padding: 6px 8px 6px 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .trayCardAppIcon {
-  width: 16px;
-  height: 16px;
+  width: 36px;
+  height: 36px;
+  margin: -6px 0 -6px 0;
+  border-radius: 8px 0 0 8px;
+  flex-shrink: 0;
+  box-shadow: none;
+}
+
+/* App Icon Component */
+.appIcon {
   border-radius: 4px;
   flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  object-fit: contain;
+}
+
+.appIconFallback {
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pp-accent-soft);
+  color: var(--pp-accent);
+  font-weight: 600;
 }
 
 .trayCardTitle {
@@ -808,9 +831,9 @@ body {
 }
 
 .previewFaviconLarge {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
 }
 
 .previewUrlLinkIcon {

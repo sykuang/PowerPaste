@@ -1,4 +1,5 @@
 use crate::db;
+use crate::macos_query_frontmost_app_info;
 use arboard::Clipboard;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -78,11 +79,16 @@ impl ClipboardWatcher {
                             
                             // Only store if within size limit
                             if size_bytes <= MAX_IMAGE_SIZE_BYTES {
-                                match db::insert_image_if_new(
+                                // Query source app info
+                                let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                                
+                                match db::insert_image_with_source_app(
                                     &app,
                                     image_bytes,
                                     image.width as u32,
                                     image.height as u32,
+                                    source_app_name,
+                                    source_app_bundle_id,
                                 ) {
                                     Ok(Some(item)) => {
                                         last_image_hash = Some(hash);
@@ -92,8 +98,8 @@ impl ClipboardWatcher {
                                     Ok(None) => {
                                         last_image_hash = Some(hash);
                                     }
-                                    Err(_) => {
-                                        // ignore transient DB errors
+                                    Err(e) => {
+                                        eprintln!("[powerpaste] failed to insert image: {e}");
                                     }
                                 }
                             } else {
@@ -124,8 +130,11 @@ impl ClipboardWatcher {
 
                 // Detect content type for the text
                 let content_type = detect_content_type(&text);
+                
+                // Query source app info
+                let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
 
-                match db::insert_text_if_new_with_type(&app, &text, content_type) {
+                match db::insert_text_with_source_app(&app, &text, content_type, source_app_name, source_app_bundle_id) {
                     Ok(Some(item)) => {
                         last_text = Some(text);
                         last_image_hash = None; // Reset image tracking
@@ -134,8 +143,8 @@ impl ClipboardWatcher {
                     Ok(None) => {
                         last_text = Some(text);
                     }
-                    Err(_) => {
-                        // ignore transient DB errors
+                    Err(e) => {
+                        eprintln!("[powerpaste] failed to insert text: {e}");
                     }
                 }
 

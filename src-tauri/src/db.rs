@@ -73,6 +73,18 @@ pub fn insert_text_if_new_with_type(
     text: &str,
     content_type: Option<String>,
 ) -> Result<Option<ClipboardItem>, String> {
+    insert_text_with_source_app(app, text, content_type, None, None)
+}
+
+/// Insert a text item with source app information.
+/// If an item with the same text already exists, move it to the top by updating its timestamp.
+pub fn insert_text_with_source_app(
+    app: &tauri::AppHandle,
+    text: &str,
+    content_type: Option<String>,
+    source_app_name: Option<String>,
+    source_app_bundle_id: Option<String>,
+) -> Result<Option<ClipboardItem>, String> {
     let text = text.trim_end_matches(['\n', '\r']);
     if text.is_empty() {
         return Ok(None);
@@ -83,7 +95,7 @@ pub fn insert_text_if_new_with_type(
 
     // Check if this exact text already exists anywhere in the clipboard
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type FROM clipboard_items WHERE kind = 'text' AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id FROM clipboard_items WHERE kind = 'text' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -130,11 +142,13 @@ pub fn insert_text_if_new_with_type(
         image_size_bytes: None,
         file_paths: None,
         content_type: content_type.clone(),
+        source_app_name: source_app_name.clone(),
+        source_app_bundle_id: source_app_bundle_id.clone(),
     };
 
     conn.execute(
-        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, content_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None, content_type],
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, content_type, source_app_name, source_app_bundle_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None, content_type, source_app_name, source_app_bundle_id],
     )
     .map_err(|e| format!("failed to insert item: {e}"))?;
 
@@ -153,6 +167,18 @@ pub fn insert_image_if_new(
     width: u32,
     height: u32,
 ) -> Result<Option<ClipboardItem>, String> {
+    insert_image_with_source_app(app, image_data, width, height, None, None)
+}
+
+/// Insert an image item with source app information.
+pub fn insert_image_with_source_app(
+    app: &tauri::AppHandle,
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+    source_app_name: Option<String>,
+    source_app_bundle_id: Option<String>,
+) -> Result<Option<ClipboardItem>, String> {
     let conn = open(app)?;
     let now = now_ms();
 
@@ -162,7 +188,7 @@ pub fn insert_image_if_new(
     
     // Check if we already have this image anywhere (by hash stored in text field)
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -213,10 +239,12 @@ pub fn insert_image_if_new(
         image_size_bytes: Some(size_bytes),
         file_paths: None,
         content_type: Some("image".to_string()),
+        source_app_name: source_app_name.clone(),
+        source_app_bundle_id: source_app_bundle_id.clone(),
     };
 
     conn.execute(
-        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, content_type, image_data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, content_type, image_data, source_app_name, source_app_bundle_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             item.id.to_string(),
             "image",
@@ -228,7 +256,9 @@ pub fn insert_image_if_new(
             height,
             size_bytes as i64,
             "image",
-            png_data
+            png_data,
+            source_app_name,
+            source_app_bundle_id
         ],
     )
     .map_err(|e| format!("failed to insert image: {e}"))?;
@@ -308,6 +338,8 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
         image_size_bytes: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
         file_paths: row.get(9)?,
         content_type: row.get(10)?,
+        source_app_name: row.get(11)?,
+        source_app_bundle_id: row.get(12)?,
     })
 }
 
@@ -317,7 +349,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
 
     let mut items = Vec::new();
     
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id";
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
         let q = format!("%{}%", q.trim());

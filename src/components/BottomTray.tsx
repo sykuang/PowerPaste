@@ -1,6 +1,139 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ClipboardItem } from "../api";
 import { ContentPreview } from "./ContentPreview";
+import { AppIcon } from "./AppIcon";
+
+interface TrayCardProps {
+  item: ClipboardItem;
+  isSelected: boolean;
+  onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
+  onCopy: (item: ClipboardItem) => void;
+  onPaste: (item: ClipboardItem) => void;
+  onContextMenu: (x: number, y: number, item: ClipboardItem) => void;
+}
+
+function TrayCard({ item, isSelected, onSelect, onCopy, onPaste, onContextMenu }: TrayCardProps) {
+  const [titleColor, setTitleColor] = useState<string | null>(null);
+
+  // Determine title based on content type
+  const title = useMemo(() => {
+    if (item.kind === "image") {
+      const dims = item.image_width && item.image_height
+        ? `${item.image_width}×${item.image_height}`
+        : "";
+      return `Image${dims ? ` (${dims})` : ""}`;
+    }
+    if (item.content_type === "url") {
+      try {
+        const url = new URL(item.text.trim());
+        return url.hostname.replace(/^www\./, "");
+      } catch {
+        return item.text.split(/\r?\n/)[0]?.trim() || "(URL)";
+      }
+    }
+    if (item.content_type === "file" || item.kind === "file") {
+      const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
+      if (paths.length > 1) return `${paths.length} files`;
+      const fileName = paths[0]?.split("/").pop() || paths[0]?.split("\\").pop() || "File";
+      return fileName;
+    }
+    return (item.text.split(/\r?\n/)[0] ?? "").trim() || "(empty)";
+  }, [item]);
+
+  // Determine meta info based on content type
+  const meta = useMemo(() => {
+    const parts: string[] = [];
+    if (item.pinned) parts.push("Pinned");
+    
+    if (item.kind === "image") {
+      if (item.image_size_bytes) {
+        const kb = item.image_size_bytes / 1024;
+        parts.push(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`);
+      }
+    } else if (item.content_type === "url") {
+      parts.push("Link");
+    } else if (item.content_type === "file" || item.kind === "file") {
+      parts.push("File");
+    } else {
+      parts.push(`${item.text.length} chars`);
+    }
+    
+    return parts.join(" • ");
+  }, [item]);
+
+  // Add content-type specific class
+  const cardClasses = [
+    "trayCard",
+    isSelected ? "isSelected" : "",
+    item.kind === "image" ? "trayCardImage" : "",
+    item.content_type === "url" ? "trayCardUrl" : "",
+    item.content_type === "file" || item.kind === "file" ? "trayCardFile" : "",
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div
+      className={cardClasses}
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        const additive = e.metaKey || e.ctrlKey;
+        const range = e.shiftKey;
+        onSelect(item, { additive, range });
+      }}
+      onDoubleClick={(e) => {
+        console.log("[powerpaste] trayCard double-click detected for item:", item.id);
+        e.preventDefault();
+        e.stopPropagation();
+        onPaste(item);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY, item);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onPaste(item);
+        }
+      }}
+      title="Click to select • Double-click to paste • Right-click for options"
+    >
+      <div 
+        className="trayCardTop"
+        style={titleColor ? { backgroundColor: `${titleColor}20`, borderColor: `${titleColor}40` } : undefined}
+      >
+        {item.source_app_bundle_id && (
+          <AppIcon
+            bundleId={item.source_app_bundle_id}
+            appName={item.source_app_name}
+            size={36}
+            className="trayCardAppIcon"
+            onColorExtracted={setTitleColor}
+          />
+        )}
+        <div className="trayCardTitle">
+          {title}
+        </div>
+        <button
+          className="trayCopyBtn"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(item);
+            void onCopy(item);
+          }}
+          title="Copy"
+        >
+          Copy
+        </button>
+      </div>
+      <div className="trayCardBody">
+        <ContentPreview item={item} />
+        <div className="trayCardMeta">{meta}</div>
+      </div>
+    </div>
+  );
+}
 
 interface BottomTrayProps {
   items: ClipboardItem[];
@@ -80,117 +213,17 @@ export function BottomTray(props: BottomTrayProps) {
         aria-label="Clipboard items"
         onWheel={handleWheel}
       >
-        {props.items.map((item) => {
-          // Determine title based on content type
-          const getCardTitle = () => {
-            if (item.kind === "image") {
-              const dims = item.image_width && item.image_height
-                ? `${item.image_width}×${item.image_height}`
-                : "";
-              return `Image${dims ? ` (${dims})` : ""}`;
-            }
-            if (item.content_type === "url") {
-              try {
-                const url = new URL(item.text.trim());
-                return url.hostname.replace(/^www\./, "");
-              } catch {
-                return item.text.split(/\r?\n/)[0]?.trim() || "(URL)";
-              }
-            }
-            if (item.content_type === "file" || item.kind === "file") {
-              const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
-              if (paths.length > 1) return `${paths.length} files`;
-              const fileName = paths[0]?.split("/").pop() || paths[0]?.split("\\").pop() || "File";
-              return fileName;
-            }
-            return (item.text.split(/\r?\n/)[0] ?? "").trim() || "(empty)";
-          };
-
-          // Determine meta info based on content type
-          const getCardMeta = () => {
-            const parts: string[] = [];
-            if (item.pinned) parts.push("Pinned");
-            
-            if (item.kind === "image") {
-              if (item.image_size_bytes) {
-                const kb = item.image_size_bytes / 1024;
-                parts.push(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`);
-              }
-            } else if (item.content_type === "url") {
-              parts.push("Link");
-            } else if (item.content_type === "file" || item.kind === "file") {
-              parts.push("File");
-            } else {
-              parts.push(`${item.text.length} chars`);
-            }
-            
-            return parts.join(" • ");
-          };
-
-          const title = getCardTitle();
-          const meta = getCardMeta();
-          const isSelected = props.selectedIds.has(item.id);
-          
-          // Add content-type specific class
-          const cardClasses = [
-            "trayCard",
-            isSelected ? "isSelected" : "",
-            item.kind === "image" ? "trayCardImage" : "",
-            item.content_type === "url" ? "trayCardUrl" : "",
-            item.content_type === "file" || item.kind === "file" ? "trayCardFile" : "",
-          ].filter(Boolean).join(" ");
-
-          return (
-            <div
-              key={item.id}
-              className={cardClasses}
-              role="button"
-              tabIndex={0}
-              onClick={(e) => {
-                const additive = e.metaKey || e.ctrlKey;
-                const range = e.shiftKey;
-                props.onSelect(item, { additive, range });
-              }}
-              onDoubleClick={(e) => {
-                console.log("[powerpaste] trayCard double-click detected for item:", item.id);
-                e.preventDefault();
-                e.stopPropagation();
-                props.onPaste(item);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                props.onContextMenu(e.clientX, e.clientY, item);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  props.onPaste(item);
-                }
-              }}
-              title="Click to select • Double-click to paste • Right-click for options"
-            >
-              <div className="trayCardTop">
-                <div className="trayCardTitle">{title}</div>
-                <button
-                  className="trayCopyBtn"
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onSelect(item);
-                    void props.onCopy(item);
-                  }}
-                  title="Copy"
-                >
-                  Copy
-                </button>
-              </div>
-              <div className="trayCardBody">
-                <ContentPreview item={item} />
-                <div className="trayCardMeta">{meta}</div>
-              </div>
-            </div>
-          );
-        })}
+        {props.items.map((item) => (
+          <TrayCard
+            key={item.id}
+            item={item}
+            isSelected={props.selectedIds.has(item.id)}
+            onSelect={props.onSelect}
+            onCopy={props.onCopy}
+            onPaste={props.onPaste}
+            onContextMenu={props.onContextMenu}
+          />
+        ))}
       </div>
 
       {/* Context Menu */}
