@@ -1,0 +1,393 @@
+# E2E Tests Workflow
+#
+# Runs Appium native UI tests and Playwright WebView tests on macOS and Windows.
+#
+# Worker configuration:
+# - GitHub-hosted runners: auto-detects 2 workers (3 CPU cores)
+# - Self-hosted runners: set POWERPASTE_TEST_WORKERS based on resources
+# - Local development: auto-detects CPU count - 1 (up to 4)
+
+name: E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: 'Number of parallel test workers'
+        required: false
+        default: '2'
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Build the app first (shared by all test jobs)
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --debug
+        env:
+          TAURI_DEBUG: 1
+
+      - name: Upload build artifacts (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-macos
+          path: src-tauri/target/debug/powerpaste
+          retention-days: 1
+
+      - name: Upload build artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-windows
+          path: src-tauri/target/debug/PowerPaste.exe
+          retention-days: 1
+
+  # macOS Appium tests (native UI)
+  test-appium-macos:
+    needs: build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-macos
+          path: src-tauri/target/debug/
+
+      - name: Make binary executable
+        run: chmod +x src-tauri/target/debug/powerpaste
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Appium and Mac2 driver
+        run: |
+          npm install -g appium
+          appium driver install mac2
+
+      - name: Enable automation mode (for CI)
+        run: |
+          # Allow automation without authentication
+          sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: Pre-grant Accessibility permissions
+        run: |
+          # Reset and grant permissions for testing
+          tccutil reset Accessibility com.kenkuang.powerpaste || true
+          # Note: Granting requires SIP disabled or MDM profile in real CI
+          # For now, tests will need to handle permission prompts
+
+      - name: Start Appium server
+        run: appium --relaxed-security &
+        
+      - name: Wait for Appium
+        run: sleep 5
+
+      - name: Run Appium tests
+        run: npm run test:e2e:mac
+        env:
+          POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-macos-results
+          path: |
+            reports/appium/mac/
+            reports/screenshots/
+          retention-days: 7
+
+  # macOS Permission dialog test (separate job, no pre-grant)
+  test-permissions-macos:
+    needs: build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-macos
+          path: src-tauri/target/debug/
+
+      - name: Make binary executable
+        run: chmod +x src-tauri/target/debug/powerpaste
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Appium and Mac2 driver
+        run: |
+          npm install -g appium
+          appium driver install mac2
+
+      - name: Enable automation mode
+        run: |
+          sudo automationmodetool enable-automationmode-without-authentication || true
+
+      - name: Reset permissions (for permission flow testing)
+        run: |
+          tccutil reset Accessibility com.kenkuang.powerpaste || true
+          tccutil reset AppleEvents com.kenkuang.powerpaste || true
+
+      - name: Start Appium server
+        run: appium --relaxed-security &
+        
+      - name: Wait for Appium
+        run: sleep 5
+
+      - name: Run permission dialog tests
+        run: npm run test:e2e:mac:permissions
+        env:
+          POWERPASTE_TEST_WORKERS: '1'  # Sequential for permission tests
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: permissions-macos-results
+          path: |
+            reports/appium/mac/
+            reports/screenshots/
+          retention-days: 7
+
+  # Windows Appium tests (native UI)
+  test-appium-windows:
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-windows
+          path: src-tauri/target/debug/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Appium and Windows driver
+        run: |
+          npm install -g appium
+          appium driver install windows
+          appium driver run windows install-wad
+        shell: pwsh
+
+      - name: Enable Developer Mode
+        run: |
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v "AllowDevelopmentWithoutDevLicense" /d "1"
+        shell: pwsh
+
+      - name: Start Appium server
+        run: Start-Process appium -ArgumentList "--relaxed-security"
+        shell: pwsh
+
+      - name: Wait for Appium
+        run: Start-Sleep -Seconds 5
+        shell: pwsh
+
+      - name: Run Appium tests
+        run: npm run test:e2e:windows
+        env:
+          POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-windows-results
+          path: |
+            reports/appium/windows/
+            reports/screenshots/
+          retention-days: 7
+
+  # Playwright WebView tests (macOS)
+  test-playwright-macos:
+    needs: build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-macos
+          path: src-tauri/target/debug/
+
+      - name: Make binary executable
+        run: chmod +x src-tauri/target/debug/powerpaste
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Pre-grant permissions
+        run: |
+          tccutil reset Accessibility com.kenkuang.powerpaste || true
+
+      - name: Run Playwright tests
+        run: npm run test:playwright
+        env:
+          POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-macos-results
+          path: |
+            reports/playwright/
+            test-results/
+          retention-days: 7
+
+  # Playwright WebView tests (Windows)
+  test-playwright-windows:
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-windows
+          path: src-tauri/target/debug/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run Playwright tests
+        run: npm run test:playwright
+        env:
+          POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-windows-results
+          path: |
+            reports/playwright/
+            test-results/
+          retention-days: 7
+
+  # Summary job
+  test-summary:
+    needs:
+      - test-appium-macos
+      - test-permissions-macos
+      - test-appium-windows
+      - test-playwright-macos
+      - test-playwright-windows
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "## E2E Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Appium macOS | ${{ needs.test-appium-macos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Permissions macOS | ${{ needs.test-permissions-macos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Appium Windows | ${{ needs.test-appium-windows.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Playwright macOS | ${{ needs.test-playwright-macos.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Playwright Windows | ${{ needs.test-playwright-windows.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any test failed
+        if: |
+          needs.test-appium-macos.result == 'failure' ||
+          needs.test-appium-windows.result == 'failure' ||
+          needs.test-playwright-macos.result == 'failure' ||
+          needs.test-playwright-windows.result == 'failure'
+        run: exit 1

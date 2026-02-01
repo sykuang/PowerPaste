@@ -1,0 +1,218 @@
+name: macOS E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Fast unit tests - run on every push
+  unit-tests:
+    name: Unit Tests
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run unit tests
+        run: npm test
+
+  # E2E tests - more comprehensive, takes longer
+  e2e-tests:
+    name: E2E Tests (macOS)
+    runs-on: macos-14
+    timeout-minutes: 45
+    needs: unit-tests  # Only run if unit tests pass
+    continue-on-error: true  # Don't fail the workflow if E2E tests fail
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+      
+      - name: Install Appium and Mac2 driver
+        run: |
+          npm install -g appium@latest
+          appium driver install mac2
+          echo "Appium version: $(appium --version)"
+          echo "Mac2 driver installed"
+      
+      - name: Grant Accessibility Permissions
+        run: |
+          # Disable System Integrity Protection checks for TCC database
+          # This allows granting accessibility permissions programmatically
+          
+          # Grant accessibility to Terminal, Xcode, and related processes
+          sudo tccutil reset Accessibility
+          
+          # Alternative: Direct TCC database modification (may not work on all runners)
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          if [ -f "$TCC_DB" ]; then
+            TIMESTAMP=$(date +%s)
+            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.Terminal',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,$TIMESTAMP);" 2>/dev/null || true
+            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.dt.Xcode',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,$TIMESTAMP);" 2>/dev/null || true
+            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.github.actions.runner',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,$TIMESTAMP);" 2>/dev/null || true
+          fi
+          
+          echo "Accessibility permissions configured"
+      
+      - name: Build Tauri app
+        run: |
+          cd src-tauri
+          cargo build --release
+          cd ..
+          npm run tauri build -- --bundles app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      
+      - name: Verify app exists
+        run: |
+          APP_PATH="src-tauri/target/release/bundle/macos/PowerPaste.app"
+          if [ -d "$APP_PATH" ]; then
+            echo "✓ App built successfully at $APP_PATH"
+            ls -la "$APP_PATH"
+          else
+            echo "✗ App not found at $APP_PATH"
+            find src-tauri/target -name "*.app" -type d 2>/dev/null || echo "No .app bundles found"
+            exit 1
+          fi
+      
+      - name: Start WebDriverAgentMac
+        run: |
+          WDA_PROJECT="$HOME/.appium/node_modules/appium-mac2-driver/WebDriverAgentMac/WebDriverAgentMac.xcodeproj"
+          
+          if [ ! -d "$WDA_PROJECT" ]; then
+            echo "WebDriverAgentMac not found, driver may not be installed correctly"
+            exit 1
+          fi
+          
+          # Build and run WDA in background
+          xcodebuild \
+            -project "$WDA_PROJECT" \
+            -scheme WebDriverAgentRunner \
+            -destination 'platform=macOS' \
+            -derivedDataPath /tmp/wda-mac \
+            test \
+            USE_PORT=10100 \
+            CODE_SIGNING_ALLOWED=NO \
+            > /tmp/wda-mac.log 2>&1 &
+          
+          echo $! > /tmp/wda-pid.txt
+          
+          # Wait for WDA to be ready
+          echo "Waiting for WebDriverAgentMac to start..."
+          MAX_WAIT=180
+          WAITED=0
+          while [ $WAITED -lt $MAX_WAIT ]; do
+            if curl -s "http://localhost:10100/status" 2>/dev/null | grep -q "ready.*true"; then
+              echo "✓ WDA ready after ${WAITED}s"
+              break
+            fi
+            sleep 3
+            WAITED=$((WAITED + 3))
+            echo "  Waiting... (${WAITED}s)"
+          done
+          
+          if [ $WAITED -ge $MAX_WAIT ]; then
+            echo "✗ WDA failed to start"
+            cat /tmp/wda-mac.log | tail -50
+            exit 1
+          fi
+      
+      - name: Start Appium server
+        run: |
+          appium --relaxed-security --port 4723 > /tmp/appium.log 2>&1 &
+          echo $! > /tmp/appium-pid.txt
+          
+          # Wait for Appium
+          sleep 5
+          MAX_WAIT=30
+          WAITED=0
+          while [ $WAITED -lt $MAX_WAIT ]; do
+            if curl -s "http://localhost:4723/status" 2>/dev/null | grep -q "ready.*true"; then
+              echo "✓ Appium ready"
+              break
+            fi
+            sleep 2
+            WAITED=$((WAITED + 2))
+          done
+          
+          if [ $WAITED -ge $MAX_WAIT ]; then
+            echo "✗ Appium failed to start"
+            cat /tmp/appium.log | tail -20
+            exit 1
+          fi
+      
+      - name: Run E2E tests
+        run: |
+          POWERPASTE_WDA_PRESTARTED=true \
+          POWERPASTE_TEST_WORKERS=1 \
+          CI=true \
+          npx wdio run tests/e2e/appium/wdio.mac.conf.ts
+        env:
+          CI: true
+      
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            /tmp/wda-mac.log
+            /tmp/appium.log
+          retention-days: 7
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          # Kill WDA
+          if [ -f /tmp/wda-pid.txt ]; then
+            kill $(cat /tmp/wda-pid.txt) 2>/dev/null || true
+          fi
+          pkill -f "WebDriverAgentRunner" 2>/dev/null || true
+          
+          # Kill Appium
+          if [ -f /tmp/appium-pid.txt ]; then
+            kill $(cat /tmp/appium-pid.txt) 2>/dev/null || true
+          fi
+          pkill -f "appium" 2>/dev/null || true
+          
+          # Kill any lingering test app
+          pkill -f "PowerPaste" 2>/dev/null || true
+          
+          echo "Cleanup complete"

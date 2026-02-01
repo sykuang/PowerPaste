@@ -13,6 +13,11 @@ export default defineConfig(async () => ({
     setupFiles: ["./src/test/setup.ts"],
     globals: true,
     css: true,
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/tests/e2e/**", // E2E tests are run separately with WebdriverIO/Playwright
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
