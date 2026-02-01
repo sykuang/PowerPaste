@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 import { ClipboardItem } from "../api";
+import { ContentPreview } from "./ContentPreview";
 
 interface BottomTrayProps {
   items: ClipboardItem[];
@@ -80,12 +81,69 @@ export function BottomTray(props: BottomTrayProps) {
         onWheel={handleWheel}
       >
         {props.items.map((item) => {
-          const title = (item.text.split(/\r?\n/)[0] ?? "").trim();
+          // Determine title based on content type
+          const getCardTitle = () => {
+            if (item.kind === "image") {
+              const dims = item.image_width && item.image_height
+                ? `${item.image_width}×${item.image_height}`
+                : "";
+              return `Image${dims ? ` (${dims})` : ""}`;
+            }
+            if (item.content_type === "url") {
+              try {
+                const url = new URL(item.text.trim());
+                return url.hostname.replace(/^www\./, "");
+              } catch {
+                return item.text.split(/\r?\n/)[0]?.trim() || "(URL)";
+              }
+            }
+            if (item.content_type === "file" || item.kind === "file") {
+              const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
+              if (paths.length > 1) return `${paths.length} files`;
+              const fileName = paths[0]?.split("/").pop() || paths[0]?.split("\\").pop() || "File";
+              return fileName;
+            }
+            return (item.text.split(/\r?\n/)[0] ?? "").trim() || "(empty)";
+          };
+
+          // Determine meta info based on content type
+          const getCardMeta = () => {
+            const parts: string[] = [];
+            if (item.pinned) parts.push("Pinned");
+            
+            if (item.kind === "image") {
+              if (item.image_size_bytes) {
+                const kb = item.image_size_bytes / 1024;
+                parts.push(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`);
+              }
+            } else if (item.content_type === "url") {
+              parts.push("Link");
+            } else if (item.content_type === "file" || item.kind === "file") {
+              parts.push("File");
+            } else {
+              parts.push(`${item.text.length} chars`);
+            }
+            
+            return parts.join(" • ");
+          };
+
+          const title = getCardTitle();
+          const meta = getCardMeta();
           const isSelected = props.selectedIds.has(item.id);
+          
+          // Add content-type specific class
+          const cardClasses = [
+            "trayCard",
+            isSelected ? "isSelected" : "",
+            item.kind === "image" ? "trayCardImage" : "",
+            item.content_type === "url" ? "trayCardUrl" : "",
+            item.content_type === "file" || item.kind === "file" ? "trayCardFile" : "",
+          ].filter(Boolean).join(" ");
+
           return (
             <div
               key={item.id}
-              className={`trayCard${isSelected ? " isSelected" : ""}`}
+              className={cardClasses}
               role="button"
               tabIndex={0}
               onClick={(e) => {
@@ -112,7 +170,7 @@ export function BottomTray(props: BottomTrayProps) {
               title="Click to select • Double-click to paste • Right-click for options"
             >
               <div className="trayCardTop">
-                <div className="trayCardTitle">{title || "(empty)"}</div>
+                <div className="trayCardTitle">{title}</div>
                 <button
                   className="trayCopyBtn"
                   type="button"
@@ -127,11 +185,8 @@ export function BottomTray(props: BottomTrayProps) {
                 </button>
               </div>
               <div className="trayCardBody">
-                <div className="trayCardText">{item.text}</div>
-                <div className="trayCardMeta">
-                  {item.pinned ? "Pinned • " : ""}
-                  {item.text.length} chars
-                </div>
+                <ContentPreview item={item} />
+                <div className="trayCardMeta">{meta}</div>
               </div>
             </div>
           );

@@ -66,7 +66,12 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<ClipboardItem>, String> {
+/// Insert a text item with optional content type detection
+pub fn insert_text_if_new_with_type(
+    app: &tauri::AppHandle,
+    text: &str,
+    content_type: Option<String>,
+) -> Result<Option<ClipboardItem>, String> {
     let text = text.trim_end_matches(['\n', '\r']);
     if text.is_empty() {
         return Ok(None);
@@ -96,15 +101,168 @@ pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<C
         created_at_ms: now_ms(),
         pinned: false,
         pinboard: None,
+        image_width: None,
+        image_height: None,
+        image_size_bytes: None,
+        file_paths: None,
+        content_type: content_type.clone(),
     };
 
     conn.execute(
-        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None],
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, content_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None, content_type],
     )
     .map_err(|e| format!("failed to insert item: {e}"))?;
 
     Ok(Some(item))
+}
+
+pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<ClipboardItem>, String> {
+    insert_text_if_new_with_type(app, text, None)
+}
+
+/// Insert an image item from raw RGBA bytes
+pub fn insert_image_if_new(
+    app: &tauri::AppHandle,
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Option<ClipboardItem>, String> {
+    let conn = open(app)?;
+
+    // Generate a simple hash of first 1KB for dedup check
+    let hash_sample: Vec<u8> = image_data.iter().take(1024).copied().collect();
+    let hash_str = format!("{:x}", md5_hash(&hash_sample));
+    
+    // Check if we already have this image (by checking recent image items)
+    let mut stmt = conn
+        .prepare("SELECT text FROM clipboard_items WHERE kind = 'image' ORDER BY created_at_ms DESC LIMIT 5")
+        .map_err(|e| format!("failed to prepare query: {e}"))?;
+    
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("failed to query: {e}"))?;
+    
+    for r in rows {
+        if let Ok(stored_hash) = r {
+            if stored_hash == hash_str {
+                return Ok(None); // Duplicate image
+            }
+        }
+    }
+
+    // Convert RGBA bytes to PNG
+    let png_data = rgba_to_png(image_data, width, height)?;
+    let size_bytes = png_data.len() as u64;
+    
+    let item = ClipboardItem {
+        id: Uuid::new_v4(),
+        kind: ClipboardItemKind::Image,
+        text: hash_str.clone(), // Store hash as text for dedup
+        created_at_ms: now_ms(),
+        pinned: false,
+        pinboard: None,
+        image_width: Some(width),
+        image_height: Some(height),
+        image_size_bytes: Some(size_bytes),
+        file_paths: None,
+        content_type: Some("image".to_string()),
+    };
+
+    conn.execute(
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, content_type, image_data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            item.id.to_string(),
+            "image",
+            item.text,
+            item.created_at_ms,
+            0,
+            Option::<String>::None,
+            width,
+            height,
+            size_bytes as i64,
+            "image",
+            png_data
+        ],
+    )
+    .map_err(|e| format!("failed to insert image: {e}"))?;
+
+    Ok(Some(item))
+}
+
+/// Convert raw RGBA bytes to PNG format
+fn rgba_to_png(rgba_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    use image::{ImageBuffer, RgbaImage};
+    use std::io::Cursor;
+    
+    // Create an image buffer from the RGBA data
+    let img: RgbaImage = ImageBuffer::from_raw(width, height, rgba_data.to_vec())
+        .ok_or_else(|| "failed to create image buffer from RGBA data".to_string())?;
+    
+    // Encode as PNG
+    let mut png_bytes: Vec<u8> = Vec::new();
+    let mut cursor = Cursor::new(&mut png_bytes);
+    img.write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|e| format!("failed to encode PNG: {e}"))?;
+    
+    Ok(png_bytes)
+}
+
+/// Simple hash function for image deduplication
+fn md5_hash(data: &[u8]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Get image data (as base64 data URL) for a clipboard item
+pub fn get_image_data(app: &tauri::AppHandle, id: Uuid) -> Result<Option<String>, String> {
+    let conn = open(app)?;
+    
+    let mut stmt = conn
+        .prepare("SELECT image_data FROM clipboard_items WHERE id = ?1 AND kind = 'image'")
+        .map_err(|e| format!("failed to prepare query: {e}"))?;
+    
+    let data: Option<Vec<u8>> = stmt
+        .query_row(params![id.to_string()], |row| row.get(0))
+        .optional()
+        .map_err(|e| format!("failed to query image: {e}"))?;
+    
+    match data {
+        Some(bytes) if !bytes.is_empty() => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            // Return as PNG data URL (arboard provides RGBA, but we'll treat as raw for now)
+            Ok(Some(format!("data:image/png;base64,{}", b64)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
+    let id_str: String = row.get(0)?;
+    let kind_str: String = row.get(1)?;
+    let kind = match kind_str.as_str() {
+        "image" => ClipboardItemKind::Image,
+        "file" => ClipboardItemKind::File,
+        _ => ClipboardItemKind::Text,
+    };
+    
+    Ok(ClipboardItem {
+        id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
+        kind,
+        text: row.get(2)?,
+        created_at_ms: row.get(3)?,
+        pinned: row.get::<_, i64>(4)? != 0,
+        pinboard: row.get(5)?,
+        image_width: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+        image_height: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
+        image_size_bytes: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        file_paths: row.get(9)?,
+        content_type: row.get(10)?,
+    })
 }
 
 pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> Result<Vec<ClipboardItem>, String> {
@@ -112,30 +270,23 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
     let limit = limit.clamp(1, 5000) as i64;
 
     let mut items = Vec::new();
+    
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type";
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
         let q = format!("%{}%", q.trim());
         let mut stmt = conn
-            .prepare(
-                "SELECT id, kind, text, created_at_ms, pinned, pinboard \
+            .prepare(&format!(
+                "SELECT {} \
                  FROM clipboard_items \
-                 WHERE text LIKE ?1 \
+                 WHERE text LIKE ?1 OR content_type LIKE ?1 \
                  ORDER BY pinned DESC, created_at_ms DESC \
                  LIMIT ?2",
-            )
+                base_cols
+            ))
             .map_err(|e| format!("failed to prepare list query: {e}"))?;
         let rows = stmt
-            .query_map(params![q, limit], |row| {
-                let id_str: String = row.get(0)?;
-                Ok(ClipboardItem {
-                    id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
-                    kind: ClipboardItemKind::Text,
-                    text: row.get(2)?,
-                    created_at_ms: row.get(3)?,
-                    pinned: row.get::<_, i64>(4)? != 0,
-                    pinboard: row.get(5)?,
-                })
-            })
+            .query_map(params![q, limit], row_to_item)
             .map_err(|e| format!("failed to query items: {e}"))?;
 
         for r in rows {
@@ -145,25 +296,16 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
     }
 
     let mut stmt = conn
-        .prepare(
-            "SELECT id, kind, text, created_at_ms, pinned, pinboard \
+        .prepare(&format!(
+            "SELECT {} \
              FROM clipboard_items \
              ORDER BY pinned DESC, created_at_ms DESC \
              LIMIT ?1",
-        )
+            base_cols
+        ))
         .map_err(|e| format!("failed to prepare list query: {e}"))?;
     let rows = stmt
-        .query_map(params![limit], |row| {
-            let id_str: String = row.get(0)?;
-            Ok(ClipboardItem {
-                id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
-                kind: ClipboardItemKind::Text,
-                text: row.get(2)?,
-                created_at_ms: row.get(3)?,
-                pinned: row.get::<_, i64>(4)? != 0,
-                pinboard: row.get(5)?,
-            })
-        })
+        .query_map(params![limit], row_to_item)
         .map_err(|e| format!("failed to query items: {e}"))?;
 
     for r in rows {

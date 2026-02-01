@@ -10,6 +10,8 @@ export type Theme = "light" | "dark" | "system";
 
 export type UiMode = "floating" | "fixed";
 
+export type ClipboardItemKind = "text" | "image" | "file";
+
 export type Settings = {
   device_id: string;
   sync_enabled: boolean;
@@ -25,12 +27,22 @@ export type Settings = {
 
 export type ClipboardItem = {
   id: string;
-  kind: "text";
+  kind: ClipboardItemKind;
   text: string;
   created_at_ms: number;
   pinned: boolean;
   /** Optional pinboard name for user-created pinboards */
   pinboard: string | null;
+  /** For image items: width in pixels */
+  image_width?: number;
+  /** For image items: height in pixels */
+  image_height?: number;
+  /** For image items: size in bytes */
+  image_size_bytes?: number;
+  /** For file items: file path(s) separated by newlines */
+  file_paths?: string;
+  /** Content type hint for preview: "url", "image", "file", or null for plain text */
+  content_type?: string;
 };
 
 export type PermissionsStatus = {
@@ -77,6 +89,14 @@ export async function listItems(args: {
     limit: args.limit,
     query: args.query ?? null,
   });
+}
+
+/**
+ * Get the image data as a base64 data URL for an image clipboard item.
+ * Returns null if the item is not an image or has no stored data.
+ */
+export async function getImageData(id: string): Promise<string | null> {
+  return invoke("get_image_data", { id });
 }
 
 export async function setItemPinned(id: string, pinned: boolean): Promise<void> {

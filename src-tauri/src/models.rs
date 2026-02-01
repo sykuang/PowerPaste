@@ -12,12 +12,29 @@ pub struct ClipboardItem {
     /// Field is named `pin_category` for backward compatibility, aliased to `pinboard` in JSON
     #[serde(default, alias = "pin_category")]
     pub pinboard: Option<String>,
+    /// For image items: width in pixels
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_width: Option<u32>,
+    /// For image items: height in pixels
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_height: Option<u32>,
+    /// For image items: size in bytes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size_bytes: Option<u64>,
+    /// For file items: file path(s) separated by newlines
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_paths: Option<String>,
+    /// Content type hint for preview: "url", "image", "file", or null for plain text
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ClipboardItemKind {
     Text,
+    Image,
+    File,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

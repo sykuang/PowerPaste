@@ -26,7 +26,11 @@
     ],
     "security": {
       "csp": null,
-      "dangerousDisableAssetCspModification": false
+      "dangerousDisableAssetCspModification": false,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "bundle": {

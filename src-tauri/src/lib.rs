@@ -861,6 +861,12 @@ fn list_items(app: tauri::AppHandle, limit: u32, query: Option<String>) -> Resul
 }
 
 #[tauri::command]
+fn get_image_data(app: tauri::AppHandle, id: String) -> Result<Option<String>, String> {
+    let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
+    db::get_image_data(&app, id)
+}
+
+#[tauri::command]
 fn set_item_pinned(app: tauri::AppHandle, id: String, pinned: bool) -> Result<(), String> {
     let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
     db::set_pinned(&app, id, pinned)
@@ -2592,6 +2598,7 @@ pub fn run() {
             set_sync_settings,
             set_ui_mode,
             list_items,
+            get_image_data,
             set_overlay_preferred_size,
             hide_main_window,
             set_item_pinned,

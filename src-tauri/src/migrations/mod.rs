@@ -19,4 +19,15 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_clipboard_items_pin_category ON clipboard_items(pin_category);\
         "
     ),
+    (
+        "003_add_image_file_support",
+        "\
+        ALTER TABLE clipboard_items ADD COLUMN image_width INTEGER DEFAULT NULL;\
+        ALTER TABLE clipboard_items ADD COLUMN image_height INTEGER DEFAULT NULL;\
+        ALTER TABLE clipboard_items ADD COLUMN image_size_bytes INTEGER DEFAULT NULL;\
+        ALTER TABLE clipboard_items ADD COLUMN file_paths TEXT DEFAULT NULL;\
+        ALTER TABLE clipboard_items ADD COLUMN content_type TEXT DEFAULT NULL;\
+        ALTER TABLE clipboard_items ADD COLUMN image_data BLOB DEFAULT NULL;\
+        "
+    ),
 ];
