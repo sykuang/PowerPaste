@@ -21,8 +21,6 @@ import {
   setItemPinboard,
   setItemPinned,
   setOverlayPreferredSize,
-  syncNow,
-  touchItem,
   writeClipboardText,
   writeClipboardFiles,
   type ClipboardItem,
@@ -887,18 +885,19 @@ function App() {
     }
   }
 
-  async function onSyncNow() {
-    setSyncStatus("Syncing...");
-    try {
-      const res = await syncNow();
-      setSyncStatus(`Sync complete (imported ${res.imported})`);
-      await reload();
-    } catch (e) {
-      setSyncStatus(String(e));
-    } finally {
-      setTimeout(() => setSyncStatus(""), 2500);
-    }
-  }
+  // TODO: Wire up sync button in UI when sync feature is fully implemented
+  // async function onSyncNow() {
+  //   setSyncStatus("Syncing...");
+  //   try {
+  //     const res = await syncNow();
+  //     setSyncStatus(`Sync complete (imported ${res.imported})`);
+  //     await reload();
+  //   } catch (e) {
+  //     setSyncStatus(String(e));
+  //   } finally {
+  //     setTimeout(() => setSyncStatus(""), 2500);
+  //   }
+  // }
 
   async function openSettingsWindow() {
     if (IS_SETTINGS_WINDOW) return;

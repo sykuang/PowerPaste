@@ -114,11 +114,11 @@ export function SettingsModal(props: SettingsModalProps) {
   const [uiMode, setUiMode] = useState<UiMode>(props.settings.ui_mode ?? "floating");
   const [showDockIconState, setShowDockIconState] = useState(props.settings.show_dock_icon ?? false);
   const [historyRetention, setHistoryRetentionState] = useState<RetentionDays>(
-    props.settings.history_retention_days ?? null
+    (props.settings.history_retention_days ?? null) as RetentionDays
   );
   const [trashEnabled, setTrashEnabledState] = useState(props.settings.trash_enabled ?? true);
   const [trashRetention, setTrashRetentionState] = useState<RetentionDays>(
-    props.settings.trash_retention_days ?? 30
+    (props.settings.trash_retention_days ?? 30) as RetentionDays
   );
   const [connectedProviders, setConnectedProviders] = useState<ConnectedProvider[]>(
     props.connectedProviders ?? []
@@ -176,9 +176,9 @@ export function SettingsModal(props: SettingsModalProps) {
         setTheme(s.theme ?? "system");
         setUiMode(s.ui_mode ?? "floating");
         setShowDockIconState(s.show_dock_icon ?? false);
-        setHistoryRetentionState(s.history_retention_days ?? null);
+        setHistoryRetentionState((s.history_retention_days ?? null) as RetentionDays);
         setTrashEnabledState(s.trash_enabled ?? true);
-        setTrashRetentionState(s.trash_retention_days ?? 30);
+        setTrashRetentionState((s.trash_retention_days ?? 30) as RetentionDays);
       });
       unlisten = h;
     })();
