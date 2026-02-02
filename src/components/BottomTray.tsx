@@ -179,9 +179,6 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
             onColorExtracted={setTitleColor}
           />
         )}
-        <div className="trayCardTitle">
-          {title}
-        </div>
         <button
           className="trayCopyBtn"
           type="button"

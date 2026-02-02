@@ -120,13 +120,16 @@ pub fn insert_text_with_source_app(
         }
 
         // Move the existing item to the top by updating its timestamp
+        // Also restore from trash if it was trashed
         conn.execute(
-            "UPDATE clipboard_items SET created_at_ms = ?1 WHERE id = ?2",
+            "UPDATE clipboard_items SET created_at_ms = ?1, is_trashed = NULL, deleted_at_ms = NULL WHERE id = ?2",
             params![now, existing_item.id.to_string()],
         )
         .map_err(|e| format!("failed to update item timestamp: {e}"))?;
 
         existing_item.created_at_ms = now;
+        existing_item.is_trashed = None;
+        existing_item.deleted_at_ms = None;
         return Ok(Some(existing_item));
     }
 
@@ -189,6 +192,8 @@ pub fn insert_image_with_source_app(
     let hash_sample: Vec<u8> = image_data.iter().take(1024).copied().collect();
     let hash_str = format!("{:x}", md5_hash(&hash_sample));
     
+    eprintln!("[powerpaste] insert_image_with_source_app: hash={}, size={}", hash_str, image_data.len());
+    
     // Check if we already have this image anywhere (by hash stored in text field)
     let mut stmt = conn
         .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
@@ -200,6 +205,7 @@ pub fn insert_image_with_source_app(
         .map_err(|e| format!("failed to check existing image: {e}"))?;
 
     if let Some(mut existing_item) = existing {
+        eprintln!("[powerpaste] found existing image with same hash, id={}", existing_item.id);
         // Image already exists - check if it's already the most recent
         let mut latest_stmt = conn
             .prepare("SELECT created_at_ms FROM clipboard_items ORDER BY created_at_ms DESC LIMIT 1")
@@ -210,21 +216,39 @@ pub fn insert_image_with_source_app(
             .map_err(|e| format!("failed to get latest time: {e}"))?;
 
         if latest_time == Some(existing_item.created_at_ms) {
+            eprintln!("[powerpaste] existing image is already most recent, skipping");
             // Already the most recent item, no change needed
             return Ok(None);
         }
 
+        eprintln!("[powerpaste] moving existing image to top: {} -> {}", existing_item.created_at_ms, now);
         // Move the existing item to the top by updating its timestamp
+        // Also restore from trash if it was trashed
         conn.execute(
-            "UPDATE clipboard_items SET created_at_ms = ?1 WHERE id = ?2",
+            "UPDATE clipboard_items SET created_at_ms = ?1, is_trashed = NULL, deleted_at_ms = NULL WHERE id = ?2",
             params![now, existing_item.id.to_string()],
         )
         .map_err(|e| format!("failed to update image timestamp: {e}"))?;
 
+        // Verify the update worked
+        let mut verify_stmt = conn
+            .prepare("SELECT created_at_ms, pinboard, is_trashed FROM clipboard_items WHERE id = ?1")
+            .map_err(|e| format!("failed to prepare verify query: {e}"))?;
+        let (updated_time, pinboard, is_trashed): (i64, Option<String>, Option<i64>) = verify_stmt
+            .query_row(params![existing_item.id.to_string()], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| format!("failed to verify update: {e}"))?;
+        eprintln!("[powerpaste] verified image after update: timestamp={}, pinboard={:?}, is_trashed={:?}", 
+            updated_time, pinboard, is_trashed);
+
         existing_item.created_at_ms = now;
+        existing_item.is_trashed = None;
+        existing_item.deleted_at_ms = None;
         return Ok(Some(existing_item));
     }
 
+    eprintln!("[powerpaste] inserting new image into database");
     // No existing image found, create a new one
     // Convert RGBA bytes to PNG
     let png_data = rgba_to_png(image_data, width, height)?;
@@ -268,6 +292,7 @@ pub fn insert_image_with_source_app(
     )
     .map_err(|e| format!("failed to insert image: {e}"))?;
 
+    eprintln!("[powerpaste] image inserted into DB successfully, id={}, created_at_ms={}", item.id, item.created_at_ms);
     Ok(Some(item))
 }
 

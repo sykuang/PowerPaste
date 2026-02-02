@@ -22,7 +22,6 @@ document.addEventListener("click", (e) => {
   }
 }, true);
 
-
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

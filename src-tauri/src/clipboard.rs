@@ -105,6 +105,23 @@ fn get_clipboard_file_urls() -> Option<Vec<String>> {
     None
 }
 
+/// Get the clipboard change count (macOS only)
+/// This increments every time the clipboard content changes
+#[cfg(target_os = "macos")]
+fn get_clipboard_change_count() -> i64 {
+    use objc2_app_kit::NSPasteboard;
+    
+    // NSPasteboard.generalPasteboard is thread-safe for reading changeCount
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.changeCount() as i64
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_clipboard_change_count() -> i64 {
+    // On non-macOS, return 0 - we'll fall back to hash-based detection
+    0
+}
+
 #[derive(Clone)]
 pub struct ClipboardWatcher {
     stop_flag: Arc<Mutex<bool>>,
@@ -119,10 +136,37 @@ impl ClipboardWatcher {
             let mut clipboard = Clipboard::new();
             let mut last_text_hash: Option<u64> = None;
             let mut last_image_hash: Option<u64> = None;
+            let mut last_change_count: i64 = get_clipboard_change_count();
+            // Track if we already processed this clipboard change (for multi-format handling)
+            let mut processed_this_change: bool = false;
+
+            eprintln!("[powerpaste] clipboard watcher started, initial change_count={}", last_change_count);
 
             loop {
                 if *stop_flag_thread.lock().unwrap_or_else(|e| e.into_inner()) {
+                    eprintln!("[powerpaste] clipboard watcher stopping");
                     break;
+                }
+
+                // Check if clipboard has changed using macOS change count
+                let current_change_count = get_clipboard_change_count();
+                if current_change_count != 0 {
+                    if current_change_count == last_change_count {
+                        // Clipboard hasn't changed, skip this iteration
+                        std::thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                    // New clipboard change detected
+                    eprintln!("[powerpaste] clipboard changed: {} -> {}", last_change_count, current_change_count);
+                    last_change_count = current_change_count;
+                    processed_this_change = false;
+                }
+
+                // If we already processed this clipboard change, skip
+                if processed_this_change {
+                    eprintln!("[powerpaste] already processed this change, skipping");
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
                 }
 
                 // Try to get image from clipboard first
@@ -130,8 +174,9 @@ impl ClipboardWatcher {
                     if let Ok(image) = cb.get_image() {
                         let image_bytes = image.bytes.as_ref();
                         let hash = image_hash(image_bytes);
+                        eprintln!("[powerpaste] found image: {}x{}, {} bytes, hash={}", image.width, image.height, image_bytes.len(), hash);
                         
-                        // Skip if same as last image
+                        // Skip if same as last image (fallback for non-macOS or same content)
                         if last_image_hash != Some(hash) {
                             let size_bytes = image_bytes.len() as u64;
                             
@@ -139,6 +184,7 @@ impl ClipboardWatcher {
                             if size_bytes <= MAX_IMAGE_SIZE_BYTES {
                                 // Query source app info
                                 let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                                eprintln!("[powerpaste] inserting image from {:?}", source_app_name);
                                 
                                 match db::insert_image_with_source_app(
                                     &app,
@@ -149,12 +195,15 @@ impl ClipboardWatcher {
                                     source_app_bundle_id,
                                 ) {
                                     Ok(Some(item)) => {
+                                        eprintln!("[powerpaste] image inserted successfully, id={}", item.id);
                                         last_image_hash = Some(hash);
-                                        last_text_hash = None; // Reset text tracking
+                                        processed_this_change = true;
                                         let _ = app.emit("powerpaste://new_item", item);
                                     }
                                     Ok(None) => {
+                                        eprintln!("[powerpaste] image deduplicated (already exists)");
                                         last_image_hash = Some(hash);
+                                        processed_this_change = true;
                                     }
                                     Err(e) => {
                                         eprintln!("[powerpaste] failed to insert image: {e}");
@@ -163,17 +212,23 @@ impl ClipboardWatcher {
                             } else {
                                 // Image too large, skip but update hash to avoid retrying
                                 last_image_hash = Some(hash);
+                                processed_this_change = true;
                                 eprintln!("[powerpaste] skipped large image: {} bytes", size_bytes);
                             }
                             
                             std::thread::sleep(Duration::from_millis(500));
                             continue;
+                        } else {
+                            eprintln!("[powerpaste] image hash unchanged, skipping");
                         }
                     }
+                } else {
+                    eprintln!("[powerpaste] clipboard.as_mut() failed or no image");
                 }
 
                 // Check for file URLs on clipboard (e.g., from Finder)
                 if let Some(file_paths) = get_clipboard_file_urls() {
+                    eprintln!("[powerpaste] found file URLs: {:?}", file_paths);
                     // Join paths with newline for storage
                     let text = file_paths.join("\n");
                     let current_hash = text_hash(&text);
@@ -184,12 +239,15 @@ impl ClipboardWatcher {
                         // Store as file content type
                         match db::insert_text_with_source_app(&app, &text, Some("file".to_string()), source_app_name, source_app_bundle_id) {
                             Ok(Some(item)) => {
+                                eprintln!("[powerpaste] file paths inserted, id={}", item.id);
                                 last_text_hash = Some(current_hash);
-                                last_image_hash = None;
+                                processed_this_change = true;
                                 let _ = app.emit("powerpaste://new_item", item);
                             }
                             Ok(None) => {
+                                eprintln!("[powerpaste] file paths deduplicated");
                                 last_text_hash = Some(current_hash);
+                                processed_this_change = true;
                             }
                             Err(e) => {
                                 eprintln!("[powerpaste] failed to insert file paths: {e}");
@@ -205,32 +263,40 @@ impl ClipboardWatcher {
                 let text = match clipboard.as_mut().ok().and_then(|c| c.get_text().ok()) {
                     Some(t) => t,
                     None => {
+                        eprintln!("[powerpaste] no text on clipboard");
                         std::thread::sleep(Duration::from_millis(500));
                         continue;
                     }
                 };
+                eprintln!("[powerpaste] found text: {} chars", text.len());
 
                 // Use hash comparison to avoid issues with minor formatting differences
                 let current_hash = text_hash(&text);
                 if last_text_hash == Some(current_hash) {
+                    eprintln!("[powerpaste] text hash unchanged, skipping");
                     std::thread::sleep(Duration::from_millis(500));
                     continue;
                 }
 
                 // Detect content type for the text
                 let content_type = detect_content_type(&text);
+                eprintln!("[powerpaste] content_type={:?}", content_type);
                 
                 // Query source app info
                 let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                eprintln!("[powerpaste] inserting text from {:?}", source_app_name);
 
                 match db::insert_text_with_source_app(&app, &text, content_type, source_app_name, source_app_bundle_id) {
                     Ok(Some(item)) => {
+                        eprintln!("[powerpaste] text inserted successfully, id={}", item.id);
                         last_text_hash = Some(current_hash);
-                        last_image_hash = None; // Reset image tracking
+                        processed_this_change = true;
                         let _ = app.emit("powerpaste://new_item", item);
                     }
                     Ok(None) => {
+                        eprintln!("[powerpaste] text deduplicated (already exists)");
                         last_text_hash = Some(current_hash);
+                        processed_this_change = true;
                     }
                     Err(e) => {
                         eprintln!("[powerpaste] failed to insert text: {e}");

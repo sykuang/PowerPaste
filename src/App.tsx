@@ -777,6 +777,9 @@ function App() {
     let unlisten: (() => void) | null = null;
     void (async () => {
       const h = await listen<ClipboardItem>("powerpaste://new_item", () => {
+        // Switch to Clipboard tab when new clipboard content arrives
+        // (new items always go to clipboard, not pinboards)
+        setActivePinboard(null);
         void reload();
       });
       unlisten = h;
@@ -792,7 +795,6 @@ function App() {
     let unlisten: (() => void) | null = null;
     void (async () => {
       const h = await listen<Settings>("settings_changed", (event) => {
-        console.log("[powerpaste] settings_changed event received:", event.payload);
         setSettings(event.payload);
       });
       unlisten = h;

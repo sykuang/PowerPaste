@@ -1050,7 +1050,19 @@ fn list_pinboard_items_paginated(
 
 #[tauri::command]
 fn list_items(app: tauri::AppHandle, limit: u32, query: Option<String>) -> Result<Vec<ClipboardItem>, String> {
-    db::list_items(&app, limit, query)
+    let result = db::list_items(&app, limit, query);
+    if let Ok(ref items) = result {
+        eprintln!("[powerpaste] list_items returned {} items", items.len());
+        if !items.is_empty() {
+            eprintln!("[powerpaste] first item: id={}, kind={:?}, created_at_ms={}, pinned={}", 
+                items[0].id, items[0].kind, items[0].created_at_ms, items[0].pinned);
+            if items.len() > 1 {
+                eprintln!("[powerpaste] second item: id={}, kind={:?}, created_at_ms={}, pinned={}", 
+                    items[1].id, items[1].kind, items[1].created_at_ms, items[1].pinned);
+            }
+        }
+    }
+    result
 }
 
 #[tauri::command]
