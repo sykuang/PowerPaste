@@ -12,6 +12,7 @@ import {
   setHistoryRetention,
   setTrashEnabled,
   setTrashRetention,
+  setLaunchAtStartup,
   connectSyncProvider,
   disconnectSyncProvider,
 } from "../api";
@@ -113,6 +114,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const [theme, setTheme] = useState<Theme>(props.settings.theme ?? "system");
   const [uiMode, setUiMode] = useState<UiMode>(props.settings.ui_mode ?? "floating");
   const [showDockIconState, setShowDockIconState] = useState(props.settings.show_dock_icon ?? false);
+  const [launchAtStartup, setLaunchAtStartupState] = useState(props.settings.launch_at_startup ?? false);
   const [historyRetention, setHistoryRetentionState] = useState<RetentionDays>(
     (props.settings.history_retention_days ?? null) as RetentionDays
   );
@@ -130,6 +132,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const [themeError, setThemeError] = useState<string | null>(null);
   const [uiModeError, setUiModeError] = useState<string | null>(null);
   const [dockIconError, setDockIconError] = useState<string | null>(null);
+  const [launchAtStartupError, setLaunchAtStartupError] = useState<string | null>(null);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -176,6 +179,7 @@ export function SettingsModal(props: SettingsModalProps) {
         setTheme(s.theme ?? "system");
         setUiMode(s.ui_mode ?? "floating");
         setShowDockIconState(s.show_dock_icon ?? false);
+        setLaunchAtStartupState(s.launch_at_startup ?? false);
         setHistoryRetentionState((s.history_retention_days ?? null) as RetentionDays);
         setTrashEnabledState(s.trash_enabled ?? true);
         setTrashRetentionState((s.trash_retention_days ?? 30) as RetentionDays);
@@ -273,6 +277,18 @@ export function SettingsModal(props: SettingsModalProps) {
     } catch (err) {
       setDockIconError(String(err));
       setShowDockIconState(prev);
+    }
+  };
+
+  const handleLaunchAtStartupChange = async (checked: boolean) => {
+    const prev = launchAtStartup;
+    setLaunchAtStartupState(checked);
+    setLaunchAtStartupError(null);
+    try {
+      await setLaunchAtStartup(checked);
+    } catch (err) {
+      setLaunchAtStartupError(String(err));
+      setLaunchAtStartupState(prev);
     }
   };
 
@@ -515,6 +531,25 @@ export function SettingsModal(props: SettingsModalProps) {
               </div>
             )}
             {dockIconError && <div className="settingsError">{dockIconError}</div>}
+
+            {/* Launch at Startup */}
+            <div className="settingsRow">
+              <div className="settingsRowLabel">
+                <span className="settingsRowTitle">Launch on Login</span>
+                <span className="settingsRowHint">Start PowerPaste automatically when you sign in</span>
+              </div>
+              <label className="settingsToggle">
+                <input
+                  type="checkbox"
+                  checked={launchAtStartup}
+                  onChange={(e) => handleLaunchAtStartupChange(e.currentTarget.checked)}
+                />
+                <span className="settingsToggleTrack">
+                  <span className="settingsToggleThumb" />
+                </span>
+              </label>
+            </div>
+            {launchAtStartupError && <div className="settingsError">{launchAtStartupError}</div>}
           </section>
 
           {/* Appearance Section */}

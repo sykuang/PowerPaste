@@ -83,31 +83,6 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
     await menu.popup(new LogicalPosition(x, y));
   };
 
-  // Determine title based on content type
-  const title = useMemo(() => {
-    if (item.kind === "image") {
-      const dims = item.image_width && item.image_height
-        ? `${item.image_width}×${item.image_height}`
-        : "";
-      return `Image${dims ? ` (${dims})` : ""}`;
-    }
-    if (item.content_type === "url") {
-      try {
-        const url = new URL(item.text.trim());
-        return url.hostname.replace(/^www\./, "");
-      } catch {
-        return item.text.split(/\r?\n/)[0]?.trim() || "(URL)";
-      }
-    }
-    if (item.content_type === "file" || item.kind === "file") {
-      const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
-      if (paths.length > 1) return `${paths.length} files`;
-      const fileName = paths[0]?.split("/").pop() || paths[0]?.split("\\").pop() || "File";
-      return fileName;
-    }
-    return (item.text.split(/\r?\n/)[0] ?? "").trim() || "(empty)";
-  }, [item]);
-
   // Determine meta info based on content type
   const meta = useMemo(() => {
     const parts: string[] = [];

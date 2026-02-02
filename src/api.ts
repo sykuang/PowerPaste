@@ -31,6 +31,8 @@ export type Settings = {
   trash_retention_days: number | null;
   /** Connected OAuth providers with account info */
   connected_providers: ConnectedProviderInfo[];
+  /** Whether to launch the app on system startup */
+  launch_at_startup: boolean;
 };
 
 export type ConnectedProviderInfo = {
@@ -191,6 +193,10 @@ export async function enableMouseEvents(): Promise<void> {
 
 export async function setShowDockIcon(show: boolean): Promise<Settings> {
   return invoke("set_show_dock_icon", { show });
+}
+
+export async function setLaunchAtStartup(enabled: boolean): Promise<Settings> {
+  return invoke("set_launch_at_startup", { enabled });
 }
 
 /** Set the theme (light, dark, or system) */

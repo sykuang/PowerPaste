@@ -87,6 +87,9 @@ pub struct Settings {
     /// Connected OAuth providers with account info
     #[serde(default)]
     pub connected_providers: Vec<ConnectedProviderInfo>,
+    /// Whether to launch the app on system startup
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 fn default_trash_enabled() -> bool {

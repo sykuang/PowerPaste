@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use uuid::Uuid;
 
@@ -882,6 +883,26 @@ fn set_show_dock_icon(app: tauri::AppHandle, show: bool) -> Result<Settings, Str
     #[cfg(target_os = "macos")]
     {
         apply_dock_icon_visibility(show);
+    }
+    
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_launch_at_startup(app: tauri::AppHandle, enabled: bool) -> Result<Settings, String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    let settings = settings_store::set_launch_at_startup(&app, settings, enabled)?;
+    
+    // Apply the autostart setting using tauri-plugin-autostart
+    let autostart_manager = app.autolaunch();
+    if enabled {
+        autostart_manager
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {e}"))?;
+    } else {
+        autostart_manager
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {e}"))?;
     }
     
     Ok(settings)
@@ -2826,6 +2847,14 @@ pub fn run() {
                         apply_dock_icon_visibility(true);
                     }
                 }
+                
+                // Apply saved launch at startup setting
+                let autostart_manager = handle.autolaunch();
+                if settings.launch_at_startup {
+                    let _ = autostart_manager.enable();
+                } else {
+                    let _ = autostart_manager.disable();
+                }
             }
 
             // Start hidden; the global hotkey toggles the UI.
@@ -2950,6 +2979,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         // Note: tauri_plugin_opener removed - it was interfering with double-clicks
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -2988,6 +3018,7 @@ pub fn run() {
             open_automation_settings,
             sync_now,
             set_show_dock_icon,
+            set_launch_at_startup,
             get_system_accent_color
         ])
         .run(tauri::generate_context!())

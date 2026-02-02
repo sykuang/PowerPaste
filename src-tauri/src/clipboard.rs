@@ -139,6 +139,8 @@ impl ClipboardWatcher {
             let mut last_change_count: i64 = get_clipboard_change_count();
             // Track if we already processed this clipboard change (for multi-format handling)
             let mut processed_this_change: bool = false;
+            // Cache source app info when clipboard changes, to avoid querying after user switches apps
+            let mut cached_source_app: Option<(Option<String>, Option<String>)> = None;
 
             eprintln!("[powerpaste] clipboard watcher started, initial change_count={}", last_change_count);
 
@@ -156,8 +158,11 @@ impl ClipboardWatcher {
                         std::thread::sleep(Duration::from_millis(500));
                         continue;
                     }
-                    // New clipboard change detected
+                    // New clipboard change detected - query frontmost app IMMEDIATELY
+                    // before user has a chance to switch apps
                     eprintln!("[powerpaste] clipboard changed: {} -> {}", last_change_count, current_change_count);
+                    cached_source_app = Some(macos_query_frontmost_app_info());
+                    eprintln!("[powerpaste] cached source app: {:?}", cached_source_app);
                     last_change_count = current_change_count;
                     processed_this_change = false;
                 }
@@ -182,8 +187,10 @@ impl ClipboardWatcher {
                             
                             // Only store if within size limit
                             if size_bytes <= MAX_IMAGE_SIZE_BYTES {
-                                // Query source app info
-                                let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                                // Use cached source app info from when clipboard changed
+                                let (source_app_name, source_app_bundle_id) = cached_source_app
+                                    .clone()
+                                    .unwrap_or_else(|| (None, None));
                                 eprintln!("[powerpaste] inserting image from {:?}", source_app_name);
                                 
                                 match db::insert_image_with_source_app(
@@ -234,7 +241,10 @@ impl ClipboardWatcher {
                     let current_hash = text_hash(&text);
                     
                     if last_text_hash != Some(current_hash) {
-                        let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                        // Use cached source app info from when clipboard changed
+                        let (source_app_name, source_app_bundle_id) = cached_source_app
+                            .clone()
+                            .unwrap_or_else(|| (None, None));
                         
                         // Store as file content type
                         match db::insert_text_with_source_app(&app, &text, Some("file".to_string()), source_app_name, source_app_bundle_id) {
@@ -282,8 +292,10 @@ impl ClipboardWatcher {
                 let content_type = detect_content_type(&text);
                 eprintln!("[powerpaste] content_type={:?}", content_type);
                 
-                // Query source app info
-                let (source_app_name, source_app_bundle_id) = macos_query_frontmost_app_info();
+                // Use cached source app info from when clipboard changed
+                let (source_app_name, source_app_bundle_id) = cached_source_app
+                    .clone()
+                    .unwrap_or_else(|| (None, None));
                 eprintln!("[powerpaste] inserting text from {:?}", source_app_name);
 
                 match db::insert_text_with_source_app(&app, &text, content_type, source_app_name, source_app_bundle_id) {
