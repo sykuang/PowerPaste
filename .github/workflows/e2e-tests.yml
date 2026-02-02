@@ -307,6 +307,7 @@ jobs:
         run: npm run test:playwright
         env:
           POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+          POWERPASTE_DEVTOOLS_PORT: 9222
 
       - name: Upload test artifacts
         if: failure()
@@ -349,6 +350,7 @@ jobs:
         run: npm run test:playwright
         env:
           POWERPASTE_TEST_WORKERS: ${{ github.event.inputs.workers || '2' }}
+          POWERPASTE_DEVTOOLS_PORT: 9222
 
       - name: Upload test artifacts
         if: failure()
