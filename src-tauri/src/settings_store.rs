@@ -45,6 +45,7 @@ pub fn load_or_init_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Re
         trash_enabled: true,
         trash_retention_days: Some(30),
         connected_providers: Vec::new(),
+        launch_at_startup: false,
     };
     save_settings(app, &s)?;
     Ok(s)
@@ -87,6 +88,12 @@ pub fn set_trash_enabled<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut setti
 
 pub fn set_trash_retention<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, days: Option<i32>) -> Result<Settings, String> {
     settings.trash_retention_days = days;
+    save_settings(app, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_launch_at_startup<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut settings: Settings, enabled: bool) -> Result<Settings, String> {
+    settings.launch_at_startup = enabled;
     save_settings(app, &settings)?;
     Ok(settings)
 }

@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#14B8A6" />
+      <stop offset="100%" stop-color="#0D9488" />
+    </linearGradient>
+    <filter id="shadow" x="80" y="48" width="352" height="416" filterUnits="userSpaceOnUse">
+        <feDropShadow dx="0" dy="10" stdDeviation="15" flood-color="#000" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+  
+  <!-- Clipboard Body with subtle gradient and shadow -->
+  <rect x="96" y="64" width="320" height="384" rx="48" fill="url(#grad1)" filter="url(#shadow)"/>
+  
+  <!-- "Paper" sheet -->
+  <rect x="128" y="140" width="256" height="280" rx="24" fill="#F0FDFA" fill-opacity="0.95"/>
+  
+  <!-- Power Bolt Icon -->
+  <path d="M276 190 L230 280 H280 L250 370 L340 260 H290 L320 190 H276 Z" fill="#F97316" stroke="#F0FDFA" stroke-width="8" stroke-linejoin="round" />
+  
+  <!-- Clip Mechanism -->
+  <rect x="176" y="48" width="160" height="64" rx="20" fill="#134E4A"/>
+  <circle cx="256" cy="80" r="12" fill="#F0FDFA" fill-opacity="0.3"/>
+</svg>

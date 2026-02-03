@@ -16,6 +16,7 @@ import {
   connectSyncProvider,
   disconnectSyncProvider,
 } from "../api";
+import { PowerPasteLogo } from "./PowerPasteLogo";
 
 // Common system shortcuts that may conflict with user's hotkey
 const CONFLICTING_SHORTCUTS = [
@@ -450,7 +451,10 @@ export function SettingsModal(props: SettingsModalProps) {
       <div className="settingsModal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="settingsHeader">
-          <h1 className="settingsTitle">Settings</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <PowerPasteLogo size={32} />
+            <h1 className="settingsTitle">Settings</h1>
+          </div>
           <button className="settingsCloseBtn" onClick={props.onClose} aria-label="Close">
             <CloseIcon />
           </button>

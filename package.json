@@ -22,7 +22,8 @@
     "test:e2e:appium": "node -e \"process.platform === 'darwin' ? require('child_process').execSync('npm run test:e2e:mac', {stdio: 'inherit'}) : require('child_process').execSync('npm run test:e2e:windows', {stdio: 'inherit'})\"",
     "test:playwright": "playwright test --config=tests/e2e/playwright/playwright.config.ts",
     "tauri": "tauri",
-    "install:dmg": "DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1) && hdiutil attach \"$DMG\" && cp -R '/Volumes/PowerPaste/PowerPaste.app' /Applications/ && hdiutil detach '/Volumes/PowerPaste'"
+    "install:dmg": "DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1) && hdiutil attach \"$DMG\" && cp -R '/Volumes/PowerPaste/PowerPaste.app' /Applications/ && hdiutil detach '/Volumes/PowerPaste'",
+    "icons:generate": "bash scripts/generate-icons.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
