@@ -2630,7 +2630,16 @@ fn setup_tray(app: &tauri::App) -> Result<(), String> {
         })
         .tooltip("PowerPaste");
 
-    if let Some(icon) = app.app_handle().default_window_icon() {
+    // Load dedicated tray template icon (44x44 for Retina/HiDPI, handled as template)
+    // Decode PNG to raw RGBA bytes for tauri::image::Image
+    let tray_icon_bytes = include_bytes!("../icons/tray-icon.png");
+    if let Ok(img) = image::load_from_memory(tray_icon_bytes) {
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+        builder = builder.icon(icon).icon_as_template(true);
+    } else if let Some(icon) = app.app_handle().default_window_icon() {
+        // Fallback to default window icon if tray icon fails to load
         builder = builder.icon(icon.clone()).icon_as_template(true);
     }
 
