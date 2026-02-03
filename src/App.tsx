@@ -4,6 +4,7 @@ import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import {
   checkPermissions,
+  closeWindowByLabel,
   deleteItem,
   deleteItemForever,
   emptyTrash,
@@ -37,6 +38,10 @@ import { useSystemAccentColor } from "./hooks/useSystemAccentColor";
 const IS_SETTINGS_WINDOW =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("settings") === "1";
+
+const IS_PERMISSIONS_WINDOW =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("permissions") === "1";
 
 function isSearchInputTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -96,7 +101,6 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
 
-  const [showPermissions, setShowPermissions] = useState(false);
   const [permissions, setPermissions] = useState<PermissionsStatus | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState(false);
 
@@ -639,6 +643,9 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Skip auto-opening permissions window if we're already in it
+    if (IS_PERMISSIONS_WINDOW || IS_SETTINGS_WINDOW) return;
+
     let cancelled = false;
 
     void (async () => {
@@ -647,7 +654,10 @@ function App() {
         const res = await checkPermissions();
         if (cancelled) return;
         setPermissions(res);
-        setShowPermissions(!res.can_paste);
+        // Open permissions window if paste is not yet enabled
+        if (!res.can_paste) {
+          void openPermissionsWindow();
+        }
       } catch (e) {
         if (cancelled) return;
         setPermissions({
@@ -656,8 +666,42 @@ function App() {
           automation_ok: false,
           accessibility_ok: false,
           details: String(e),
+          is_bundled: false,
+          executable_path: "",
         });
-        setShowPermissions(true);
+        void openPermissionsWindow();
+      } finally {
+        if (!cancelled) setCheckingPermissions(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load permissions status when in the permissions window
+  useEffect(() => {
+    if (!IS_PERMISSIONS_WINDOW) return;
+
+    let cancelled = false;
+    void (async () => {
+      setCheckingPermissions(true);
+      try {
+        const res = await checkPermissions();
+        if (cancelled) return;
+        setPermissions(res);
+      } catch (e) {
+        if (cancelled) return;
+        setPermissions({
+          platform: "unknown",
+          can_paste: false,
+          automation_ok: false,
+          accessibility_ok: false,
+          details: String(e),
+          is_bundled: false,
+          executable_path: "",
+        });
       } finally {
         if (!cancelled) setCheckingPermissions(false);
       }
@@ -881,7 +925,7 @@ function App() {
       console.error("[powerpaste] pasteText error:", e);
       setSyncStatus(String(e));
       clearAfterMs = 5000;
-      setShowPermissions(true);
+      void openPermissionsWindow();
     } finally {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
@@ -942,23 +986,120 @@ function App() {
     }
   }
 
-  async function closeCurrentWindow() {
+  async function openPermissionsWindow() {
+    if (IS_PERMISSIONS_WINDOW || IS_SETTINGS_WINDOW) return;
     try {
-      const mod = await import("@tauri-apps/api/webviewWindow");
-      const current =
-        typeof mod.getCurrentWebviewWindow === "function"
-          ? mod.getCurrentWebviewWindow()
-          : null;
-      if (current) {
-        await current.close();
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const existing = await WebviewWindow.getByLabel("permissions");
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
         return;
       }
-    } catch {
-      // ignore
+
+      // In dev mode, use the current origin; in production, use relative path
+      const isDev = window.location.hostname === "localhost";
+      const permissionsUrl = isDev 
+        ? `${window.location.origin}/?permissions=1`
+        : "index.html?permissions=1";
+
+      const win = new WebviewWindow("permissions", {
+        url: permissionsUrl,
+        title: "Setup — PowerPaste",
+        width: 520,
+        height: 480,
+        minWidth: 480,
+        minHeight: 400,
+        resizable: true,
+        decorations: false,
+        transparent: true,
+        shadow: false,
+      });
+
+      win.once("tauri://error", (e) => {
+        setSyncStatus(String((e as { payload?: unknown }).payload ?? "Failed to open Permissions"));
+        setTimeout(() => setSyncStatus(""), 5000);
+      });
+    } catch (e) {
+      setSyncStatus(String(e));
+      setTimeout(() => setSyncStatus(""), 5000);
+    }
+  }
+
+  async function closeCurrentWindow() {
+    console.log("[powerpaste] closeCurrentWindow called, IS_PERMISSIONS_WINDOW:", IS_PERMISSIONS_WINDOW, "IS_SETTINGS_WINDOW:", IS_SETTINGS_WINDOW);
+    
+    // Use our backend command which is more reliable
+    try {
+      if (IS_PERMISSIONS_WINDOW) {
+        await closeWindowByLabel("permissions");
+        return;
+      }
+      if (IS_SETTINGS_WINDOW) {
+        await closeWindowByLabel("settings");
+        return;
+      }
+    } catch (e) {
+      console.error("[powerpaste] closeWindowByLabel failed:", e);
+    }
+    
+    // Fallback: try Tauri webviewWindow API
+    try {
+      const mod = await import("@tauri-apps/api/webviewWindow");
+      console.log("[powerpaste] webviewWindow module loaded");
+      
+      // Try getCurrentWebviewWindow first
+      if (typeof mod.getCurrentWebviewWindow === "function") {
+        const current = mod.getCurrentWebviewWindow();
+        console.log("[powerpaste] getCurrentWebviewWindow returned:", current?.label);
+        if (current) {
+          try {
+            await current.destroy();
+            console.log("[powerpaste] window destroyed");
+            return;
+          } catch (destroyErr) {
+            console.log("[powerpaste] destroy failed, trying close:", destroyErr);
+            await current.close();
+            console.log("[powerpaste] window closed");
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[powerpaste] closeCurrentWindow error:", e);
     }
 
     // Fallback for browser preview.
+    console.log("[powerpaste] using window.close() fallback");
     window.close();
+  }
+
+  if (IS_PERMISSIONS_WINDOW) {
+    return (
+      <div className="app permissionsWindow">
+        <PermissionsModal
+          checking={checkingPermissions}
+          status={permissions}
+          onClose={() => void closeCurrentWindow()}
+          closeOnBackdrop={false}
+          onRecheck={async () => {
+            setCheckingPermissions(true);
+            try {
+              const res = await checkPermissions();
+              setPermissions(res);
+              if (res.can_paste) {
+                // Close the window after a short delay to show success
+                setTimeout(() => void closeCurrentWindow(), 500);
+              }
+            } finally {
+              setCheckingPermissions(false);
+            }
+          }}
+          onOpenAccessibility={() => void openAccessibilitySettings()}
+          onOpenAutomation={() => void openAutomationSettings()}
+        />
+      </div>
+    );
   }
 
   if (IS_SETTINGS_WINDOW) {
@@ -1335,30 +1476,6 @@ function App() {
           </div>
         </div>
       )}
-
-      {showPermissions ? (
-        <PermissionsModal
-          checking={checkingPermissions}
-          status={permissions}
-          onClose={() => {
-            setShowPermissions(false);
-          }}
-          onRecheck={async () => {
-            setCheckingPermissions(true);
-            try {
-              const res = await checkPermissions();
-              setPermissions(res);
-              if (res.can_paste) {
-                setShowPermissions(false);
-              }
-            } finally {
-              setCheckingPermissions(false);
-            }
-          }}
-          onOpenAccessibility={() => void openAccessibilitySettings()}
-          onOpenAutomation={() => void openAutomationSettings()}
-        />
-      ) : null}
     </div>
   );
 }

@@ -769,6 +769,19 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    eprintln!("[powerpaste] close_window_by_label called with label: {}", label);
+    if let Some(window) = app.get_webview_window(&label) {
+        window.close().map_err(|e| format!("Failed to close window: {}", e))?;
+        eprintln!("[powerpaste] window '{}' closed successfully", label);
+        Ok(())
+    } else {
+        eprintln!("[powerpaste] window '{}' not found", label);
+        Err(format!("Window '{}' not found", label))
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn macos_hide_overlay_panel_if_visible<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     use std::sync::atomic::Ordering;
@@ -804,6 +817,10 @@ struct PermissionsStatus {
     automation_ok: bool,
     accessibility_ok: bool,
     details: Option<String>,
+    /// Whether running as a bundled .app (true) or dev binary (false)
+    is_bundled: bool,
+    /// The path to the executable that needs permissions
+    executable_path: String,
 }
 
 #[tauri::command]
@@ -1111,6 +1128,12 @@ fn list_pinboards(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     db::list_pinboards(&app)
 }
 
+/// Check if a file path exists on the filesystem
+#[tauri::command]
+fn check_file_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
 #[tauri::command]
 fn delete_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let id = Uuid::parse_str(&id).map_err(|_| "invalid id".to_string())?;
@@ -1372,6 +1395,28 @@ fn check_permissions() -> Result<PermissionsStatus, String> {
     {
         use std::process::Command;
 
+        // Detect if running as bundled app or dev binary
+        let exe_path = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let is_bundled = exe_path.contains(".app/Contents/MacOS/");
+
+        // Check Accessibility permission using AXIsProcessTrusted
+        // This checks if THIS process has accessibility access
+        let accessibility_ok: bool = unsafe {
+            #[link(name = "ApplicationServices", kind = "framework")]
+            extern "C" {
+                fn AXIsProcessTrusted() -> u8;
+            }
+            
+            let result = AXIsProcessTrusted();
+            eprintln!("[powerpaste] AXIsProcessTrusted returned: {}", result);
+            result != 0
+        };
+        eprintln!("[powerpaste] accessibility_ok: {}, exe_path: {}, is_bundled: {}", accessibility_ok, exe_path, is_bundled);
+
+        // For Automation, we still need to test with osascript since there's no direct API
+        // But we use a simpler check that's less likely to give false positives
         let automation = Command::new("osascript")
             .args([
                 "-e",
@@ -1379,7 +1424,7 @@ fn check_permissions() -> Result<PermissionsStatus, String> {
             ])
             .output();
 
-        let (automation_ok, mut details) = match automation {
+        let (automation_ok, details) = match automation {
             Ok(out) if out.status.success() => (true, None),
             Ok(out) => {
                 let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1388,56 +1433,58 @@ fn check_permissions() -> Result<PermissionsStatus, String> {
             Err(e) => (false, Some(format!("Automation check failed: {e}"))),
         };
 
-        let accessibility = Command::new("osascript")
-            .args([
-                "-e",
-                // Empty keystroke: should be a no-op but still exercises Accessibility permission.
-                "tell application \"System Events\" to keystroke \"\"",
-            ])
-            .output();
-
-        let (accessibility_ok, acc_details) = match accessibility {
-            Ok(out) if out.status.success() => (true, None),
-            Ok(out) => {
-                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                (false, Some(if msg.is_empty() { "Accessibility check failed".to_string() } else { msg }))
-            }
-            Err(e) => (false, Some(format!("Accessibility check failed: {e}"))),
+        // Combine the status - need both Accessibility AND Automation for paste to work
+        let can_paste = automation_ok && accessibility_ok;
+        
+        // Build details message
+        let final_details = if !accessibility_ok && !automation_ok {
+            Some("Both Accessibility and Automation permissions are required.".to_string())
+        } else if !accessibility_ok {
+            Some("Accessibility permission is required.".to_string())
+        } else {
+            details
         };
 
-        if details.is_none() {
-            details = acc_details;
-        }
-
-        let can_paste = automation_ok && accessibility_ok;
         return Ok(PermissionsStatus {
             platform: "macos".to_string(),
             can_paste,
             automation_ok,
             accessibility_ok,
-            details,
+            details: final_details,
+            is_bundled,
+            executable_path: exe_path,
         });
     }
 
     #[cfg(target_os = "windows")]
     {
+        let exe_path = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
         return Ok(PermissionsStatus {
             platform: "windows".to_string(),
             can_paste: false,
             automation_ok: true,
             accessibility_ok: true,
             details: Some("Paste automation is not implemented on Windows yet.".to_string()),
+            is_bundled: true,
+            executable_path: exe_path,
         });
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
+        let exe_path = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
         return Ok(PermissionsStatus {
             platform: "linux".to_string(),
             can_paste: false,
             automation_ok: true,
             accessibility_ok: true,
             details: Some("Paste automation is not implemented on this platform yet.".to_string()),
+            is_bundled: true,
+            executable_path: exe_path,
         });
     }
 }
@@ -3014,9 +3061,11 @@ pub fn run() {
             get_app_icon_path,
             set_overlay_preferred_size,
             hide_main_window,
+            close_window_by_label,
             set_item_pinned,
             set_item_pinboard,
             list_pinboards,
+            check_file_exists,
             delete_item,
             enable_mouse_events,
             write_clipboard_text,

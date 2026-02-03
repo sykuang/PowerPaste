@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { ClipboardItem } from "../api";
@@ -119,12 +120,13 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
       role="button"
       tabIndex={0}
       onClick={(e) => {
+        console.log("[powerpaste] trayCard SINGLE-click for item:", item.id);
         const additive = e.metaKey || e.ctrlKey;
         const range = e.shiftKey;
         onSelect(item, { additive, range });
       }}
       onDoubleClick={(e) => {
-        console.log("[powerpaste] trayCard double-click detected for item:", item.id);
+        console.log("[powerpaste] trayCard DOUBLE-click detected for item:", item.id);
         e.preventDefault();
         e.stopPropagation();
         onPaste(item);
@@ -199,6 +201,20 @@ export function BottomTray(props: BottomTrayProps) {
   const trayCardsRef = useRef<HTMLDivElement>(null);
   const isFloating = props.uiMode === "floating";
 
+  // Gap between cards (matches CSS clamp values)
+  const gap = 12; // Use max value from clamp(6px, 0.6vw, 12px)
+  const cardWidth = 280;
+  const cardHeight = 100; // Estimated height for floating mode
+
+  // Virtualizer configuration
+  const virtualizer = useVirtualizer({
+    count: props.items.length,
+    getScrollElement: () => trayCardsRef.current,
+    estimateSize: () => (isFloating ? cardHeight : cardWidth + gap),
+    horizontal: !isFloating,
+    overscan: 3,
+  });
+
   // Convert vertical mouse wheel to horizontal scroll (only in fixed mode)
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     // In floating mode, let vertical scroll work naturally
@@ -217,6 +233,8 @@ export function BottomTray(props: BottomTrayProps) {
     }
   }, [isFloating]);
 
+  const virtualItems = virtualizer.getVirtualItems();
+
   return (
     <div className="bottomTray" role="region" aria-label="Quick copy tray">
       <div 
@@ -225,24 +243,48 @@ export function BottomTray(props: BottomTrayProps) {
         aria-label="Clipboard items"
         onWheel={handleWheel}
       >
-        {props.items.map((item) => (
-          <TrayCard
-            key={item.id}
-            item={item}
-            isSelected={props.selectedIds.has(item.id)}
-            selectedCount={props.selectedIds.size}
-            isTrashView={props.isTrashView}
-            onSelect={props.onSelect}
-            onCopy={props.onCopy}
-            onPaste={props.onPaste}
-            onDelete={props.onDelete}
-            onTogglePin={props.onTogglePin}
-            onSaveToPinboard={props.onSaveToPinboard}
-            onRemoveFromPinboard={props.onRemoveFromPinboard}
-            onRestore={props.onRestore}
-            onDeleteForever={props.onDeleteForever}
-          />
-        ))}
+        {/* Inner container with total size for virtualization */}
+        <div
+          className="trayCardsInner"
+          style={{
+            position: "relative",
+            width: isFloating ? "100%" : virtualizer.getTotalSize(),
+            height: isFloating ? virtualizer.getTotalSize() : "100%",
+          }}
+        >
+          {virtualItems.map((virtualItem) => {
+            const item = props.items[virtualItem.index];
+            return (
+              <div
+                key={item.id}
+                className="trayCardWrapper"
+                style={{
+                  position: "absolute",
+                  top: isFloating ? virtualItem.start : 0,
+                  left: isFloating ? 0 : virtualItem.start,
+                  width: isFloating ? "100%" : cardWidth,
+                  height: isFloating ? cardHeight : "100%",
+                }}
+              >
+                <TrayCard
+                  item={item}
+                  isSelected={props.selectedIds.has(item.id)}
+                  selectedCount={props.selectedIds.size}
+                  isTrashView={props.isTrashView}
+                  onSelect={props.onSelect}
+                  onCopy={props.onCopy}
+                  onPaste={props.onPaste}
+                  onDelete={props.onDelete}
+                  onTogglePin={props.onTogglePin}
+                  onSaveToPinboard={props.onSaveToPinboard}
+                  onRemoveFromPinboard={props.onRemoveFromPinboard}
+                  onRestore={props.onRestore}
+                  onDeleteForever={props.onDeleteForever}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

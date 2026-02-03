@@ -75,6 +75,10 @@ export type PermissionsStatus = {
   automation_ok: boolean;
   accessibility_ok: boolean;
   details: string | null;
+  /** Whether running as a bundled .app (true) or dev binary (false) */
+  is_bundled: boolean;
+  /** The path to the executable that needs permissions */
+  executable_path: string;
 };
 
 export async function getSettings(): Promise<Settings> {
@@ -135,6 +139,14 @@ export async function listPinboards(): Promise<string[]> {
   return invoke("list_pinboards");
 }
 
+/**
+ * Check if a file path exists on the filesystem.
+ * Used to determine whether to show file preview or treat as text.
+ */
+export async function checkFileExists(path: string): Promise<boolean> {
+  return invoke("check_file_exists", { path });
+}
+
 export async function deleteItem(id: string): Promise<void> {
   return invoke("delete_item", { id });
 }
@@ -183,6 +195,17 @@ export async function hideMainWindow(): Promise<void> {
     console.log("[powerpaste] hideMainWindow invoke completed");
   } catch (e) {
     console.error("[powerpaste] hideMainWindow error:", e);
+    throw e;
+  }
+}
+
+export async function closeWindowByLabel(label: string): Promise<void> {
+  console.log("[powerpaste] closeWindowByLabel called with label:", label);
+  try {
+    await invoke("close_window_by_label", { label });
+    console.log("[powerpaste] closeWindowByLabel completed");
+  } catch (e) {
+    console.error("[powerpaste] closeWindowByLabel error:", e);
     throw e;
   }
 }

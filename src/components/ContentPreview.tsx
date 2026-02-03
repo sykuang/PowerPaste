@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClipboardItem, getImageData } from "../api";
+import { ClipboardItem, getImageData, checkFileExists } from "../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 interface ContentPreviewProps {
@@ -359,6 +359,37 @@ export function ContentPreview({ item }: ContentPreviewProps) {
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [fileExists, setFileExists] = useState<boolean | null>(null);
+
+  // Check if this is a file path that we can preview
+  const filePath = item.file_paths?.split("\n")[0] || (item.content_type === "file" ? item.text.trim() : null);
+  const isVideo = filePath && isVideoFile(filePath);
+  const isLocalImage = filePath && isImageFile(filePath);
+  const isFileItem = item.content_type === "file" || item.kind === "file";
+
+  // Check if file exists when it's a file item
+  useEffect(() => {
+    if (!isFileItem || !filePath) {
+      setFileExists(null);
+      return;
+    }
+    
+    let cancelled = false;
+    checkFileExists(filePath)
+      .then((exists) => {
+        if (cancelled) return;
+        setFileExists(exists);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // On error, assume file doesn't exist
+        setFileExists(false);
+      });
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [isFileItem, filePath]);
 
   // Load image data for image items
   useEffect(() => {
@@ -385,13 +416,27 @@ export function ContentPreview({ item }: ContentPreviewProps) {
     };
   }, [item.id, item.kind]);
 
-  // Check if this is a file path that we can preview
-  const filePath = item.file_paths?.split("\n")[0] || (item.content_type === "file" ? item.text.trim() : null);
-  const isVideo = filePath && isVideoFile(filePath);
-  const isLocalImage = filePath && isImageFile(filePath);
+  // If this looks like a file but file doesn't exist, treat as text
+  if (isFileItem && fileExists === false) {
+    return (
+      <div className="contentPreview contentPreviewText">
+        <div className="trayCardText">{item.text}</div>
+      </div>
+    );
+  }
+
+  // Still checking if file exists - show loading or text temporarily
+  if (isFileItem && fileExists === null) {
+    // Show text while checking (avoids flicker for non-existent files)
+    return (
+      <div className="contentPreview contentPreviewText">
+        <div className="trayCardText">{item.text}</div>
+      </div>
+    );
+  }
 
   // Video file preview
-  if (isVideo && filePath) {
+  if (isVideo && filePath && fileExists) {
     const fileName = filePath.split("/").pop() || filePath.split("\\").pop() || "Video";
     return (
       <div className="contentPreview contentPreviewVideo">
@@ -404,7 +449,7 @@ export function ContentPreview({ item }: ContentPreviewProps) {
   }
 
   // Local image file preview
-  if (isLocalImage && filePath) {
+  if (isLocalImage && filePath && fileExists) {
     const fileName = filePath.split("/").pop() || filePath.split("\\").pop() || "Image";
     return (
       <div className="contentPreview contentPreviewImage">
@@ -537,8 +582,8 @@ export function ContentPreview({ item }: ContentPreviewProps) {
     );
   }
 
-  // File preview
-  if (item.content_type === "file" || item.kind === "file") {
+  // File preview (only if file exists)
+  if ((item.content_type === "file" || item.kind === "file") && fileExists) {
     const paths = (item.file_paths || item.text).split("\n").filter(Boolean);
     const firstPath = paths[0] || "";
     const fileName = firstPath.split("/").pop() || firstPath.split("\\").pop() || firstPath;
