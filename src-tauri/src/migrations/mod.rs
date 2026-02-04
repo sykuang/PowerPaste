@@ -87,4 +87,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES ('rebuild');\
         "
     ),
+    (
+        "009_add_image_mime",
+        "\
+        ALTER TABLE clipboard_items ADD COLUMN image_mime TEXT DEFAULT NULL;\
+        "
+    ),
 ];

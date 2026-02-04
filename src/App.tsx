@@ -16,7 +16,7 @@ import {
   listTrashedItems,
   openAccessibilitySettings,
   openAutomationSettings,
-  pasteText,
+  pasteItem,
   hideMainWindow,
   restoreFromTrash,
   setItemPinboard,
@@ -764,7 +764,7 @@ function App() {
           // Inline paste logic to avoid stale closure issues
           void (async () => {
             try {
-              await pasteText(itemToPaste.text);
+              await pasteItem(itemToPaste.id);
               // Note: hideMainWindow is now called by the backend before pasting
             } catch {
               // Errors handled in UI
@@ -956,13 +956,13 @@ function App() {
     console.log("[powerpaste] onPaste called for item:", item.id, item.text.substring(0, 50));
     let clearAfterMs = 1200;
     try {
-      console.log("[powerpaste] calling pasteText...");
-      await pasteText(item.text);
-      console.log("[powerpaste] pasteText completed");
+      console.log("[powerpaste] calling pasteItem...");
+      await pasteItem(item.id);
+      console.log("[powerpaste] pasteItem completed");
       setSyncStatus("Pasted");
       // Note: hideMainWindow is now called by the backend before pasting
     } catch (e) {
-      console.error("[powerpaste] pasteText error:", e);
+      console.error("[powerpaste] pasteItem error:", e);
       setSyncStatus(String(e));
       clearAfterMs = 5000;
       void openPermissionsWindow();

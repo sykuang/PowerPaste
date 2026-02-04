@@ -55,6 +55,8 @@ export type ClipboardItem = {
   image_height?: number;
   /** For image items: size in bytes */
   image_size_bytes?: number;
+  /** For image items: original MIME type (e.g., image/jpeg) */
+  image_mime?: string;
   /** For file items: file path(s) separated by newlines */
   file_paths?: string;
   /** Content type hint for preview: "url", "image", "file", or null for plain text */
@@ -161,6 +163,10 @@ export async function writeClipboardFiles(paths: string[]): Promise<void> {
 
 export async function pasteText(text: string): Promise<void> {
   return invoke("paste_text", { text });
+}
+
+export async function pasteItem(id: string): Promise<void> {
+  return invoke("paste_item", { id });
 }
 
 export async function checkPermissions(): Promise<PermissionsStatus> {

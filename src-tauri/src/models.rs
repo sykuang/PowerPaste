@@ -21,6 +21,9 @@ pub struct ClipboardItem {
     /// For image items: size in bytes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_size_bytes: Option<u64>,
+    /// For image items: original MIME type (e.g., image/jpeg)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_mime: Option<String>,
     /// For file items: file path(s) separated by newlines
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_paths: Option<String>,

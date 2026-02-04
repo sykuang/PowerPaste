@@ -75,7 +75,7 @@ vi.mock("./api", () => {
     deleteItem: vi.fn(async () => undefined),
     writeClipboardText: vi.fn(async () => undefined),
     writeClipboardFiles: vi.fn(async () => undefined),
-    pasteText: vi.fn(async () => undefined),
+    pasteItem: vi.fn(async () => undefined),
     touchItem: vi.fn(async () => true),
     checkFileExists: vi.fn(async () => false),
     checkPermissions: vi.fn(async () => ({
@@ -96,7 +96,7 @@ vi.mock("./api", () => {
 });
 
 import App from "./App";
-import { writeClipboardText, pasteText } from "./api";
+import { writeClipboardText, pasteItem } from "./api";
 
 describe("App", () => {
   it("renders and shows tray clipboard items", async () => {
@@ -200,8 +200,8 @@ describe("App", () => {
   });
 
   it("double click pastes card content", async () => {
-    const pasteTextMock = vi.mocked(pasteText);
-    pasteTextMock.mockClear();
+    const pasteItemMock = vi.mocked(pasteItem);
+    pasteItemMock.mockClear();
 
     render(<App />);
 
@@ -210,14 +210,12 @@ describe("App", () => {
     const cards = Array.from(tray.querySelectorAll<HTMLElement>(".trayCard"));
     expect(cards.length).toBeGreaterThan(0);
 
-    const expectedText =
-      cards[0]?.querySelector<HTMLElement>(".trayCardText")?.textContent?.trim() ?? "";
-    expect(expectedText).not.toBe("");
+    const expectedId = "1";
 
     fireEvent.doubleClick(cards[0]!);
 
     await waitFor(() => {
-      expect(pasteTextMock).toHaveBeenCalledWith(expectedText);
+      expect(pasteItemMock).toHaveBeenCalledWith(expectedId);
     });
   });
 });

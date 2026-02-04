@@ -90,6 +90,10 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
     if (item.pinned) parts.push("Pinned");
     
     if (item.kind === "image") {
+      if (item.image_mime) {
+        const label = item.image_mime.split("/")[1]?.toUpperCase();
+        if (label) parts.push(label);
+      }
       if (item.image_size_bytes) {
         const kb = item.image_size_bytes / 1024;
         parts.push(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`);

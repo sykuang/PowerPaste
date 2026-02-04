@@ -1,6 +1,9 @@
 use crate::db;
 use crate::macos_query_frontmost_app_info;
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
+use std::borrow::Cow;
+use std::fs;
+use uuid::Uuid;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -105,6 +108,108 @@ fn get_clipboard_file_urls() -> Option<Vec<String>> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn get_clipboard_image_encoded() -> Option<db::EncodedImage> {
+    use std::process::Command;
+    use base64::Engine;
+
+    let swift_code = r#"
+import Cocoa
+import Foundation
+
+let pasteboard = NSPasteboard.general
+let types: [(String, String)] = [
+  ("public.png", "image/png"),
+  ("public.jpeg", "image/jpeg"),
+  ("org.webmproject.webp", "image/webp"),
+  ("public.tiff", "image/tiff"),
+]
+
+for (uti, mime) in types {
+  let pbType = NSPasteboard.PasteboardType(uti)
+  if let data = pasteboard.data(forType: pbType) {
+    print("MIME:\(mime)")
+    print(data.base64EncodedString())
+    exit(0)
+  }
+}
+"#;
+
+    let output = Command::new("swift")
+        .args(["-e", swift_code])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let mime_line = lines.next()?;
+    let b64 = lines.next().unwrap_or("");
+    let mime = mime_line.strip_prefix("MIME:")?.to_string();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    Some(db::EncodedImage { bytes, mime })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_clipboard_image_encoded() -> Option<db::EncodedImage> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn mime_to_uti(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/png" => Some("public.png"),
+        "image/jpeg" | "image/jpg" => Some("public.jpeg"),
+        "image/webp" => Some("org.webmproject.webp"),
+        "image/tiff" => Some("public.tiff"),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_clipboard_image_encoded_macos(bytes: &[u8], uti: &str) -> Result<(), String> {
+    use std::process::Command;
+
+    let filename = format!("powerpaste-image-{}.bin", Uuid::new_v4());
+    let path = std::env::temp_dir().join(filename);
+    fs::write(&path, bytes).map_err(|e| format!("failed to write temp image: {e}"))?;
+
+    let path_str = path.to_string_lossy().replace('"', "\\\"");
+    let swift_code = format!(
+        r#"
+import Cocoa
+import Foundation
+
+let pasteboard = NSPasteboard.general
+pasteboard.clearContents()
+let data = try Data(contentsOf: URL(fileURLWithPath: "{path}"))
+let pbType = NSPasteboard.PasteboardType("{uti}")
+let ok = pasteboard.setData(data, forType: pbType)
+if !ok {{
+  exit(2)
+}}
+"#,
+        path = path_str,
+        uti = uti
+    );
+
+    let output = Command::new("swift")
+        .args(["-e", &swift_code])
+        .output()
+        .map_err(|e| format!("failed to run swift for image clipboard: {e}"))?;
+
+    let _ = fs::remove_file(&path);
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("failed to set image clipboard with original format".to_string())
+    }
+}
+
 /// Get the clipboard change count (macOS only)
 /// This increments every time the clipboard content changes
 #[cfg(target_os = "macos")]
@@ -194,6 +299,7 @@ impl ClipboardWatcher {
                                     .clone()
                                     .unwrap_or_else(|| (None, None));
                                 eprintln!("[powerpaste] inserting image from {:?}", source_app_name);
+                                let encoded_image = get_clipboard_image_encoded();
                                 
                                 match db::insert_image_with_source_app(
                                     &app,
@@ -202,6 +308,7 @@ impl ClipboardWatcher {
                                     image.height as u32,
                                     source_app_name,
                                     source_app_bundle_id,
+                                    encoded_image,
                                 ) {
                                     Ok(Some(item)) => {
                                         last_image_hash = Some(hash);
@@ -271,7 +378,10 @@ impl ClipboardWatcher {
                             handled = true;
                         }
                     } else {
-                        handled = true;
+                        // No file URLs on the clipboard; fall through to text handling.
+                        // Guard against regressions where we accidentally short-circuit text inserts.
+                        debug_assert!(!handled, "no file URLs should not short-circuit text handling");
+                        handled = false;
                     }
                     if handled {
                         sleep_ms = 250;
@@ -350,6 +460,39 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
         .map_err(|e| format!("clipboard set failed: {e}"))
 }
 
+/// Write encoded image bytes to the clipboard, preserving format when possible.
+pub fn set_clipboard_image_encoded(bytes: &[u8], mime: Option<&str>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(mime) = mime {
+            if let Some(uti) = mime_to_uti(mime) {
+                if set_clipboard_image_encoded_macos(bytes, uti).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    set_clipboard_image_decoded(bytes)
+}
+
+fn set_clipboard_image_decoded(encoded_bytes: &[u8]) -> Result<(), String> {
+    let img = image::load_from_memory(encoded_bytes)
+        .map_err(|e| format!("failed to decode image: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let bytes = rgba.into_raw();
+
+    let mut clipboard = Clipboard::new().map_err(|e| format!("clipboard init failed: {e}"))?;
+    clipboard
+        .set_image(ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(bytes),
+        })
+        .map_err(|e| format!("clipboard set image failed: {e}"))
+}
+
 /// Write file paths to the clipboard (macOS: as file URLs that Finder can paste)
 #[cfg(target_os = "macos")]
 pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
@@ -394,6 +537,11 @@ pasteboard.writeObjects(urls as [NSPasteboardWriting])
     }
     
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
+    Err("file clipboard is only supported on macOS".to_string())
 }
 
 #[cfg(not(target_os = "macos"))]

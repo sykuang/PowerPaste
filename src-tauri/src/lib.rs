@@ -1297,6 +1297,25 @@ fn write_clipboard_files(paths: Vec<String>) -> Result<(), String> {
 fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
     clipboard::set_clipboard_text(&text)?;
 
+    // Move the pasted item to the top immediately so it appears as the most recent card.
+    // This avoids relying on clipboard change detection (which can be unchanged if the
+    // same text was already on the clipboard).
+    match db::insert_text_with_source_app(&app, &text, None, None, None) {
+        Ok(Some(item)) => {
+            let _ = app.emit("powerpaste://new_item", item);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[powerpaste] paste_text: failed to bump item: {e}");
+        }
+    }
+
+    perform_paste(&app)?;
+
+    Ok(())
+}
+
+fn perform_paste(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
@@ -1308,6 +1327,7 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
         // Use a flag to wait for hide completion
         let hidden = Arc::new(AtomicBool::new(false));
         let hidden_clone = hidden.clone();
+        let app = app.clone();
         
         let _ = app.run_on_main_thread(move || {
             use objc2::rc::Retained;
@@ -1391,6 +1411,44 @@ Privacy & Security → Automation (allow controlling System Events). Details: {m
         }
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+fn paste_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    use crate::models::ClipboardItemKind;
+    let uuid = Uuid::parse_str(&id).map_err(|e| format!("invalid item id: {e}"))?;
+    let item = db::get_item_by_id(&app, uuid)?
+        .ok_or_else(|| "clipboard item not found".to_string())?;
+
+    let is_file = item.kind == ClipboardItemKind::File
+        || item.content_type.as_deref() == Some("file");
+
+    if is_file {
+        let paths_str = item.file_paths.clone().unwrap_or_else(|| item.text.clone());
+        let paths: Vec<String> = paths_str
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        clipboard::set_clipboard_files(&paths)?;
+    } else if item.kind == ClipboardItemKind::Image {
+        let (bytes, mime) = db::get_image_encoded_bytes(&app, uuid)?
+            .ok_or_else(|| "image data missing for item".to_string())?;
+        clipboard::set_clipboard_image_encoded(&bytes, mime.as_deref())?;
+    } else {
+        clipboard::set_clipboard_text(&item.text)?;
+    }
+
+    // Move item to the top and refresh UI.
+    if db::touch_item(&app, uuid)? {
+        if let Some(updated) = db::get_item_by_id(&app, uuid)? {
+            let _ = app.emit("powerpaste://new_item", updated);
+        }
+    }
+
+    perform_paste(&app)?;
     Ok(())
 }
 
@@ -3081,6 +3139,7 @@ pub fn run() {
             write_clipboard_text,
             write_clipboard_files,
             paste_text,
+            paste_item,
             check_permissions,
             open_accessibility_settings,
             open_automation_settings,

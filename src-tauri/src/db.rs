@@ -1,6 +1,7 @@
 use crate::models::{ClipboardItem, ClipboardItemKind};
 use crate::paths::db_path;
 use rusqlite::{params, Connection};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -228,6 +229,7 @@ pub fn insert_text_with_source_app(
         image_width: None,
         image_height: None,
         image_size_bytes: None,
+        image_mime: None,
         file_paths: None,
         content_type: content_type.clone(),
         source_app_name: source_app_name.clone(),
@@ -261,7 +263,13 @@ pub fn insert_image_if_new(
     width: u32,
     height: u32,
 ) -> Result<Option<ClipboardItem>, String> {
-    insert_image_with_source_app(app, image_data, width, height, None, None)
+    insert_image_with_source_app(app, image_data, width, height, None, None, None)
+}
+
+#[derive(Debug, Clone)]
+pub struct EncodedImage {
+    pub bytes: Vec<u8>,
+    pub mime: String,
 }
 
 /// Insert an image item with source app information.
@@ -272,6 +280,7 @@ pub fn insert_image_with_source_app(
     height: u32,
     source_app_name: Option<String>,
     source_app_bundle_id: Option<String>,
+    encoded_image: Option<EncodedImage>,
 ) -> Result<Option<ClipboardItem>, String> {
     let conn = open(app)?;
     let now = now_ms();
@@ -340,9 +349,14 @@ pub fn insert_image_with_source_app(
 
     eprintln!("[powerpaste] inserting new image into database");
     // No existing image found, create a new one
-    // Convert RGBA bytes to PNG
-    let png_data = rgba_to_png(image_data, width, height)?;
-    let size_bytes = png_data.len() as u64;
+    // Prefer storing original encoded bytes if available; otherwise fall back to PNG.
+    let (stored_bytes, stored_mime): (Cow<'_, [u8]>, String) = if let Some(encoded) = encoded_image {
+        (Cow::Owned(encoded.bytes), encoded.mime)
+    } else {
+        let png_data = rgba_to_png(image_data, width, height)?;
+        (Cow::Owned(png_data), "image/png".to_string())
+    };
+    let size_bytes = stored_bytes.len() as u64;
     
     let item = ClipboardItem {
         id: Uuid::new_v4(),
@@ -354,6 +368,7 @@ pub fn insert_image_with_source_app(
         image_width: Some(width),
         image_height: Some(height),
         image_size_bytes: Some(size_bytes),
+        image_mime: Some(stored_mime.clone()),
         file_paths: None,
         content_type: Some("image".to_string()),
         source_app_name: source_app_name.clone(),
@@ -363,7 +378,7 @@ pub fn insert_image_with_source_app(
     };
 
     conn.execute(
-        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, content_type, image_data, source_app_name, source_app_bundle_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO clipboard_items (id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, content_type, image_data, image_mime, source_app_name, source_app_bundle_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             item.id.to_string(),
             "image",
@@ -375,7 +390,8 @@ pub fn insert_image_with_source_app(
             height,
             size_bytes as i64,
             "image",
-            png_data,
+            stored_bytes.as_ref(),
+            stored_mime,
             source_app_name,
             source_app_bundle_id
         ],
@@ -438,23 +454,66 @@ pub fn get_image_data(app: &tauri::AppHandle, id: Uuid) -> Result<Option<String>
     let conn = open(app)?;
     
     let mut stmt = conn
-        .prepare("SELECT image_data FROM clipboard_items WHERE id = ?1 AND kind = 'image'")
+        .prepare("SELECT image_data, image_mime FROM clipboard_items WHERE id = ?1 AND kind = 'image'")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
-    let data: Option<Vec<u8>> = stmt
-        .query_row(params![id.to_string()], |row| row.get(0))
+    let data: Option<(Vec<u8>, Option<String>)> = stmt
+        .query_row(params![id.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))
         .optional()
         .map_err(|e| format!("failed to query image: {e}"))?;
     
     match data {
-        Some(bytes) if !bytes.is_empty() => {
+        Some((bytes, mime)) if !bytes.is_empty() => {
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            // Return as PNG data URL (arboard provides RGBA, but we'll treat as raw for now)
-            Ok(Some(format!("data:image/png;base64,{}", b64)))
+            let mime = mime.unwrap_or_else(|| "image/png".to_string());
+            Ok(Some(format!("data:{};base64,{}", mime, b64)))
         }
         _ => Ok(None),
     }
+}
+
+/// Get encoded image bytes + mime for restoring to clipboard.
+pub fn get_image_encoded_bytes(
+    app: &tauri::AppHandle,
+    id: Uuid,
+) -> Result<Option<(Vec<u8>, Option<String>)>, String> {
+    let conn = open(app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT image_data, image_mime FROM clipboard_items \
+             WHERE id = ?1 AND kind = 'image' AND (is_trashed IS NULL OR is_trashed = 0) \
+             LIMIT 1",
+        )
+        .map_err(|e| format!("failed to prepare image query: {e}"))?;
+
+    let data: Option<(Vec<u8>, Option<String>)> = stmt
+        .query_row(params![id.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()
+        .map_err(|e| format!("failed to query image data: {e}"))?;
+    Ok(data)
+}
+
+/// Get a single item by id (excluding trashed items).
+pub fn get_item_by_id(app: &tauri::AppHandle, id: Uuid) -> Result<Option<ClipboardItem>, String> {
+    let conn = open(app)?;
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} \
+             FROM clipboard_items \
+             WHERE id = ?1 AND (is_trashed IS NULL OR is_trashed = 0) \
+             LIMIT 1",
+            base_cols
+        ))
+        .map_err(|e| format!("failed to prepare item query: {e}"))?;
+
+    let item = stmt
+        .query_row(params![id.to_string()], row_to_item)
+        .optional()
+        .map_err(|e| format!("failed to query item: {e}"))?;
+    Ok(item)
 }
 
 fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
@@ -476,12 +535,13 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
         image_width: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
         image_height: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
         image_size_bytes: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
-        file_paths: row.get(9)?,
-        content_type: row.get(10)?,
-        source_app_name: row.get(11)?,
-        source_app_bundle_id: row.get(12)?,
-        is_trashed: row.get::<_, Option<i64>>(13)?.map(|v| v != 0),
-        deleted_at_ms: row.get(14)?,
+        image_mime: row.get(9)?,
+        file_paths: row.get(10)?,
+        content_type: row.get(11)?,
+        source_app_name: row.get(12)?,
+        source_app_bundle_id: row.get(13)?,
+        is_trashed: row.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+        deleted_at_ms: row.get(15)?,
     })
 }
 
@@ -519,7 +579,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
 
     let mut items = Vec::new();
     
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
         let fts_query = fts_query_from_user(&q);
@@ -738,7 +798,7 @@ pub fn list_trashed_items(app: &tauri::AppHandle, limit: u32, offset: u32) -> Re
     let limit = limit.clamp(1, 100) as i64;
     let offset = offset as i64;
 
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     // Get total count
     let total: i64 = conn
