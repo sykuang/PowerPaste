@@ -6,6 +6,10 @@ Folder sync is designed to work with providers that sync a folder to your machin
 
 Built with Tauri v2 (Rust backend) + React/TypeScript (UI).
 
+## Logo & Branding
+
+See [docs/LOGO.md](docs/LOGO.md) for logo usage and regenerating icons.
+
 ## Prerequisites
 
 - Node.js 18+ (or newer)

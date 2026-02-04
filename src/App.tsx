@@ -952,6 +952,7 @@ function App() {
       const existing = await WebviewWindow.getByLabel("settings");
       if (existing) {
         await existing.show();
+        await existing.setSize({ width: 1400, height: 720 });
         await existing.setFocus();
         return;
       }
@@ -965,14 +966,14 @@ function App() {
       const win = new WebviewWindow("settings", {
         url: settingsUrl,
         title: "Settings — PowerPaste",
-        width: 860,
-        height: 640,
-        minWidth: 720,
-        minHeight: 520,
+        width: 1400,
+        height: 720,
+        minWidth: 1120,
+        minHeight: 640,
         resizable: true,
-        decorations: false,
-        transparent: true,
-        shadow: false,
+        decorations: true,
+        transparent: false,
+        shadow: true,
       });
 
       // Best-effort: if window creation fails, surface it in status.

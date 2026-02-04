@@ -111,6 +111,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const isMac = props.platform === "macos";
 
   // Local state
+  const [activeSection, setActiveSection] = useState<"general" | "appearance" | "storage" | "cloud">("general");
   const [hotkey, setHotkeyValue] = useState(props.settings.hotkey);
   const [theme, setTheme] = useState<Theme>(props.settings.theme ?? "system");
   const [uiMode, setUiMode] = useState<UiMode>(props.settings.ui_mode ?? "floating");
@@ -137,6 +138,14 @@ export function SettingsModal(props: SettingsModalProps) {
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const settingsContentRef = useRef<HTMLDivElement>(null);
+
+  const setSection = useCallback((section: typeof activeSection) => {
+    setActiveSection(section);
+    if (settingsContentRef.current) {
+      settingsContentRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, []);
 
   // Hotkey recording state
   const [isRecordingHotkey, setIsRecordingHotkey] = useState(false);
@@ -168,6 +177,8 @@ export function SettingsModal(props: SettingsModalProps) {
       applyTheme(theme);
     }
   }, [theme]);
+
+  // Split-page mode: sidebar directly controls visible section.
 
   // Listen for settings_changed event to sync with external changes
   useEffect(() => {
@@ -443,26 +454,81 @@ export function SettingsModal(props: SettingsModalProps) {
     </svg>
   );
 
+  const activeMeta = {
+    general: { label: "General", icon: <KeyboardIcon /> },
+    appearance: { label: "Appearance", icon: <PaletteIcon /> },
+    storage: { label: "Storage", icon: <ClockIcon /> },
+    cloud: { label: "Cloud Sync", icon: <CloudIcon /> },
+  }[activeSection];
+
   return (
     <div
       className={closeOnBackdrop ? "modalBackdrop" : "modalBackdrop modalBackdropStatic"}
       onClick={closeOnBackdrop ? props.onClose : undefined}
     >
       <div className="settingsModal" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="settingsHeader">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <PowerPasteLogo size={32} />
-            <h1 className="settingsTitle">Settings</h1>
+        <aside className="settingsSidebar">
+          <div className="settingsSidebarHeader">
+            <PowerPasteLogo size={28} />
+            <div className="settingsSidebarTitle">PowerPaste</div>
           </div>
-          <button className="settingsCloseBtn" onClick={props.onClose} aria-label="Close">
-            <CloseIcon />
-          </button>
-        </div>
+          <nav className="settingsNav" aria-label="Settings sections">
+            <button
+              className={`settingsNavItem ${activeSection === "general" ? "active" : ""}`}
+              onClick={() => setSection("general")}
+              type="button"
+            >
+              <span className="settingsNavIcon"><KeyboardIcon /></span>
+              <span>General</span>
+            </button>
+            <button
+              className={`settingsNavItem ${activeSection === "appearance" ? "active" : ""}`}
+              onClick={() => setSection("appearance")}
+              type="button"
+            >
+              <span className="settingsNavIcon"><PaletteIcon /></span>
+              <span>Appearance</span>
+            </button>
+            <button
+              className={`settingsNavItem ${activeSection === "storage" ? "active" : ""}`}
+              onClick={() => setSection("storage")}
+              type="button"
+            >
+              <span className="settingsNavIcon"><ClockIcon /></span>
+              <span>Storage</span>
+            </button>
+            <button
+              className={`settingsNavItem ${activeSection === "cloud" ? "active" : ""}`}
+              onClick={() => setSection("cloud")}
+              type="button"
+            >
+              <span className="settingsNavIcon"><CloudIcon /></span>
+              <span>Cloud Sync</span>
+            </button>
+          </nav>
+          <div className="settingsSidebarFooter">
+            <button className="settingsNavItem settingsNavHelp" type="button">
+              <span className="settingsNavIcon">?</span>
+              <span>Help Center</span>
+            </button>
+          </div>
+        </aside>
 
-        <div className="settingsContent">
-          {/* General Section */}
-          <section className="settingsSection">
+        <div className="settingsMain">
+          <div className="settingsMainHeader">
+            <div className="settingsMainTitleGroup">
+              <h1 className="settingsMainTitle">Settings</h1>
+              <p className="settingsMainSubtitle">Fine-tune how PowerPaste behaves across devices.</p>
+            </div>
+            <div className="settingsHeaderBadge" aria-live="polite">
+              <span className="settingsHeaderBadgeIcon">{activeMeta.icon}</span>
+              <span>{activeMeta.label}</span>
+            </div>
+          </div>
+
+          <div className="settingsContent" ref={settingsContentRef}>
+          {activeSection === "general" && (
+          <section id="settings-general" className="settingsSection settingsCard">
             <div className="settingsSectionHeader">
               <KeyboardIcon />
               <h2 className="settingsSectionTitle">General</h2>
@@ -555,9 +621,11 @@ export function SettingsModal(props: SettingsModalProps) {
             </div>
             {launchAtStartupError && <div className="settingsError">{launchAtStartupError}</div>}
           </section>
+          )}
 
           {/* Appearance Section */}
-          <section className="settingsSection">
+          {activeSection === "appearance" && (
+          <section id="settings-appearance" className="settingsSection settingsCard">
             <div className="settingsSectionHeader">
               <PaletteIcon />
               <h2 className="settingsSectionTitle">Appearance</h2>
@@ -592,9 +660,11 @@ export function SettingsModal(props: SettingsModalProps) {
             </div>
             {themeError && <div className="settingsError">{themeError}</div>}
           </section>
+          )}
 
           {/* Storage Section */}
-          <section className="settingsSection">
+          {activeSection === "storage" && (
+          <section id="settings-storage" className="settingsSection settingsCard">
             <div className="settingsSectionHeader">
               <ClockIcon />
               <h2 className="settingsSectionTitle">Storage</h2>
@@ -665,9 +735,11 @@ export function SettingsModal(props: SettingsModalProps) {
             )}
             {trashError && trashEnabled && <div className="settingsError">{trashError}</div>}
           </section>
+          )}
 
           {/* Cloud Sync Section */}
-          <section className="settingsSection">
+          {activeSection === "cloud" && (
+          <section id="settings-cloud" className="settingsSection settingsCard">
             <div className="settingsSectionHeader">
               <CloudIcon />
               <h2 className="settingsSectionTitle">Cloud Sync</h2>
@@ -779,6 +851,8 @@ export function SettingsModal(props: SettingsModalProps) {
 
             {syncError && <div className="settingsError">{syncError}</div>}
           </section>
+          )}
+        </div>
         </div>
       </div>
 
