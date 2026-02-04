@@ -139,6 +139,7 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn optimize(app: &tauri::AppHandle) -> Result<(), String> {
     let conn = open(app)?;
     conn.execute_batch("PRAGMA optimize;")
@@ -148,6 +149,7 @@ pub fn optimize(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// Insert a text item with optional content type detection.
 /// If an item with the same text already exists, move it to the top by updating its timestamp.
+#[allow(dead_code)]
 pub fn insert_text_if_new_with_type(
     app: &tauri::AppHandle,
     text: &str,
@@ -245,12 +247,14 @@ pub fn insert_text_with_source_app(
     Ok(Some(item))
 }
 
+#[allow(dead_code)]
 pub fn insert_text_if_new(app: &tauri::AppHandle, text: &str) -> Result<Option<ClipboardItem>, String> {
     insert_text_if_new_with_type(app, text, None)
 }
 
 /// Insert an image item from raw RGBA bytes.
 /// If an image with the same hash already exists, move it to the top by updating its timestamp.
+#[allow(dead_code)]
 pub fn insert_image_if_new(
     app: &tauri::AppHandle,
     image_data: &[u8],

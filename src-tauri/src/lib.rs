@@ -138,6 +138,7 @@ static MOUSE_FOCUS_MONITOR_PTR: OnceLock<Mutex<Option<usize>>> = OnceLock::new()
 static CLICK_OUTSIDE_MONITOR_PTR: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 static PANEL_INIT_RETRY_SCHEDULED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -156,6 +157,7 @@ static PANEL_SHOW_GENERATION: std::sync::atomic::AtomicU64 =
 /// Timestamp (in milliseconds) when the click-outside monitor was installed.
 /// Used to ignore events that arrive immediately after installation (grace period).
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 static CLICK_MONITOR_INSTALL_TIME_MS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
@@ -269,6 +271,7 @@ fn macos_screen_containing_cursor(mtm: objc2::MainThreadMarker) -> Option<objc2:
 /// Install a local keyboard event monitor to capture Cmd+A and Cmd+C.
 /// NSPanel overlays don't receive menu bar shortcuts, so we capture them directly.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_install_keyboard_monitor<R: tauri::Runtime>(_app_handle: tauri::AppHandle<R>) {
     // TEMPORARILY DISABLED to debug keyboard input issue
     eprintln!("[powerpaste] keyboard monitor DISABLED for debugging");
@@ -377,6 +380,7 @@ fn macos_remove_keyboard_monitor() {
 /// NSPanel with NonactivatingPanel style doesn't automatically give focus to
 /// views on first click, so we need to manually make the content view first responder.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_install_mouse_focus_monitor() {
     use block2::StackBlock;
     use objc2::rc::Retained;
@@ -492,6 +496,7 @@ fn macos_remove_mouse_focus_monitor() {
 /// NSPanel with NonactivatingPanel style doesn't trigger focus-lost events,
 /// so we need to monitor global mouse clicks to hide the panel.
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_install_click_outside_monitor<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
     use block2::StackBlock;
     use objc2::rc::Retained;
@@ -1652,6 +1657,7 @@ fn toggle_standard_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -
     Ok(())
 }
 
+#[allow(dead_code)]
 fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     // Load UI mode from settings before toggling
     if let Ok(settings) = settings_store::get(app) {
@@ -1869,6 +1875,7 @@ fn toggle_nspanel_overlay(
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
     use objc2::exception;
     use objc2::rc::Retained;
