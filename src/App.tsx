@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import {
   checkPermissions,
   closeWindowByLabel,
@@ -992,7 +992,7 @@ function App() {
       const existing = await WebviewWindow.getByLabel("settings");
       if (existing) {
         await existing.show();
-        await existing.setSize({ width: 1400, height: 720 });
+        await existing.setSize(new LogicalSize(1400, 720));
         await existing.setFocus();
         return;
       }

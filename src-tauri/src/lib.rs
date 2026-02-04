@@ -5,13 +5,12 @@ mod paths;
 mod settings_store;
 mod sync;
 
-use models::{ClipboardItem, ConnectedProviderInfo, Settings, SyncProvider, UiMode};
+use models::{ClipboardItem, ConnectedProviderInfo, Settings, SyncProvider};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::RunEvent;
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use uuid::Uuid;
@@ -19,8 +18,8 @@ use uuid::Uuid;
 // tauri-nspanel imports for macOS panel support
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{
-    tauri_panel, CollectionBehavior, ManagerExt as NspanelManagerExt, Panel as NspanelPanel,
-    PanelLevel, StyleMask, WebviewWindowExt as NspanelWebviewWindowExt,
+    tauri_panel, CollectionBehavior, ManagerExt as NspanelManagerExt, PanelLevel, StyleMask,
+    WebviewWindowExt as NspanelWebviewWindowExt,
 };
 
 // Define the PowerPaste panel with tauri-nspanel
@@ -3083,12 +3082,6 @@ pub fn run() {
             set_launch_at_startup,
             get_system_accent_color
         ])
-        .on_run_event(|app, event| match event {
-            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-                let _ = db::optimize(app);
-            }
-            _ => {}
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
