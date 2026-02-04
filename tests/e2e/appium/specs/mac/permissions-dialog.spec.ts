@@ -8,8 +8,8 @@
  *   npm run test:e2e:mac:permissions
  *
  * Before running, reset permissions:
- *   tccutil reset Accessibility com.kenkuang.powerpaste
- *   tccutil reset AppleEvents com.kenkuang.powerpaste
+ *   tccutil reset Accessibility com.primattek.powerpaste
+ *   tccutil reset AppleEvents com.primattek.powerpaste
  */
 
 import { getSelector, accessibilityId } from '../../helpers/index.js';
@@ -175,7 +175,7 @@ describe('PowerPaste Permission Dialog Flow (macOS)', () => {
 
       // Grant permission via tccutil (requires sudo in CI)
       // await browser.executeScript('macos: appleScript', [{
-      //   command: 'do shell script "tccutil add Accessibility com.kenkuang.powerpaste" with administrator privileges'
+      //   command: 'do shell script "tccutil add Accessibility com.primattek.powerpaste" with administrator privileges'
       // }]);
 
       // For now, just verify the app can detect permission state

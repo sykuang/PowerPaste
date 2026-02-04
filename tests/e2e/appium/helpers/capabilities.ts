@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // App identifiers from tauri.conf.json
-export const APP_BUNDLE_ID = 'com.kenkuang.powerpaste';
+export const APP_BUNDLE_ID = 'com.primattek.powerpaste';
 export const APP_NAME = 'PowerPaste';
 
 // Base ports for parallel workers

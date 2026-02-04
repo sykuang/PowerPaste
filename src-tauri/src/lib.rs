@@ -2983,7 +2983,10 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                let _ = setup_tray(app);
+                match setup_tray(app) {
+                    Ok(_) => eprintln!("[powerpaste] tray icon setup successful"),
+                    Err(e) => eprintln!("[powerpaste] tray icon setup FAILED: {e}"),
+                }
                 if let Err(e) = setup_app_menu(app) {
                     eprintln!("[powerpaste] failed to set up app menu shortcuts: {e}");
                 }

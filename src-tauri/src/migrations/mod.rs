@@ -45,4 +45,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_clipboard_items_trashed ON clipboard_items(is_trashed, deleted_at_ms DESC);\
         "
     ),
+    (
+        "006_rename_pin_category_to_pinboard",
+        "\
+        ALTER TABLE clipboard_items ADD COLUMN pinboard TEXT DEFAULT NULL;\
+        "
+    ),
 ];

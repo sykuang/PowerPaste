@@ -49,8 +49,19 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
             .map_err(|e| format!("failed to check migration {name}: {e}"))?;
 
         if count == 0 {
-            tx.execute_batch(sql)
-                .map_err(|e| format!("failed to apply migration {name}: {e}"))?;
+            // Handle migrations that might fail due to column already existing
+            let result = tx.execute_batch(sql);
+            match result {
+                Ok(_) => {},
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    // Ignore "duplicate column name" errors - column was added manually or by previous partial run
+                    if !err_msg.contains("duplicate column name") {
+                        return Err(format!("failed to apply migration {name}: {e}"));
+                    }
+                    eprintln!("[powerpaste] migration {name}: column already exists, skipping");
+                }
+            }
             
             tx.execute(
                 "INSERT INTO _migrations (name, applied_at_ms) VALUES (?1, ?2)",

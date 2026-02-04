@@ -123,7 +123,7 @@ jobs:
       - name: Pre-grant Accessibility permissions
         run: |
           # Reset and grant permissions for testing
-          tccutil reset Accessibility com.kenkuang.powerpaste || true
+          tccutil reset Accessibility com.primattek.powerpaste || true
           # Note: Granting requires SIP disabled or MDM profile in real CI
           # For now, tests will need to handle permission prompts
 
@@ -186,8 +186,8 @@ jobs:
 
       - name: Reset permissions (for permission flow testing)
         run: |
-          tccutil reset Accessibility com.kenkuang.powerpaste || true
-          tccutil reset AppleEvents com.kenkuang.powerpaste || true
+          tccutil reset Accessibility com.primattek.powerpaste || true
+          tccutil reset AppleEvents com.primattek.powerpaste || true
 
       - name: Start Appium server
         run: appium --relaxed-security &
@@ -301,7 +301,7 @@ jobs:
 
       - name: Pre-grant permissions
         run: |
-          tccutil reset Accessibility com.kenkuang.powerpaste || true
+          tccutil reset Accessibility com.primattek.powerpaste || true
 
       - name: Run Playwright tests
         run: npm run test:playwright
