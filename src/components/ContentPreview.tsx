@@ -2,6 +2,45 @@ import { useEffect, useRef, useState } from "react";
 import { ClipboardItem, getImageData, checkFileExists } from "../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+type VideoThumb = {
+  thumbnail: string | null;
+  duration: number | null;
+  error: boolean;
+};
+
+function createLruCache<K, V>(limit: number) {
+  const map = new Map<K, V>();
+  return {
+    get(key: K): V | undefined {
+      if (!map.has(key)) return undefined;
+      const value = map.get(key) as V;
+      map.delete(key);
+      map.set(key, value);
+      return value;
+    },
+    has(key: K): boolean {
+      return map.has(key);
+    },
+    set(key: K, value: V) {
+      if (map.has(key)) map.delete(key);
+      map.set(key, value);
+      if (map.size > limit) {
+        const oldestKey = map.keys().next().value as K;
+        map.delete(oldestKey);
+      }
+    },
+  };
+}
+
+const fileExistsCache = createLruCache<string, boolean>(500);
+const fileExistsInFlight = new Map<string, Promise<boolean>>();
+
+const imageDataCache = createLruCache<string, string | null>(50);
+const imageDataInFlight = new Map<string, Promise<string | null>>();
+
+const videoThumbCache = createLruCache<string, VideoThumb>(50);
+const videoThumbInFlight = new Map<string, Promise<VideoThumb>>();
+
 interface ContentPreviewProps {
   item: ClipboardItem;
 }
@@ -231,11 +270,54 @@ function VideoThumbnail({ filePath }: { filePath: string }) {
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    const cached = videoThumbCache.get(filePath);
+    if (cached) {
+      setThumbnail(cached.thumbnail);
+      setDuration(cached.duration);
+      setError(cached.error);
+      return;
+    }
+
+    const existing = videoThumbInFlight.get(filePath);
+    if (existing) {
+      let cancelled = false;
+      existing.then((result) => {
+        if (cancelled) return;
+        setThumbnail(result.thumbnail);
+        setDuration(result.duration);
+        setError(result.error);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
     let cancelled = false;
+    let resolved = false;
+    let resolvePromise: ((value: VideoThumb) => void) | null = null;
+    const inFlightPromise = new Promise<VideoThumb>((resolve) => {
+      resolvePromise = resolve;
+    });
+    videoThumbInFlight.set(filePath, inFlightPromise);
+
+    const finalize = (result: VideoThumb, { cache }: { cache: boolean }) => {
+      if (resolved) return;
+      resolved = true;
+      if (cache) {
+        videoThumbCache.set(filePath, result);
+      }
+      videoThumbInFlight.delete(filePath);
+      resolvePromise?.(result);
+      if (!cancelled) {
+        setThumbnail(result.thumbnail);
+        setDuration(result.duration);
+        setError(result.error);
+      }
+    };
 
     const handleLoadedMetadata = () => {
       if (cancelled) return;
@@ -256,16 +338,19 @@ function VideoThumbnail({ filePath }: { filePath: string }) {
         canvas.height = video.videoHeight * scale;
         
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        setThumbnail(canvas.toDataURL("image/jpeg", 0.8));
+        finalize(
+          { thumbnail: canvas.toDataURL("image/jpeg", 0.8), duration: video.duration, error: false },
+          { cache: true }
+        );
       } catch (e) {
         console.error("[powerpaste] Failed to capture video frame:", e);
-        setError(true);
+        finalize({ thumbnail: null, duration: null, error: true }, { cache: true });
       }
     };
 
     const handleError = () => {
       if (cancelled) return;
-      setError(true);
+      finalize({ thumbnail: null, duration: null, error: true }, { cache: true });
     };
 
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -278,7 +363,7 @@ function VideoThumbnail({ filePath }: { filePath: string }) {
       video.load();
     } catch (e) {
       console.error("[powerpaste] Failed to load video:", e);
-      setError(true);
+      finalize({ thumbnail: null, duration: null, error: true }, { cache: true });
     }
 
     return () => {
@@ -287,6 +372,10 @@ function VideoThumbnail({ filePath }: { filePath: string }) {
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("error", handleError);
       video.src = "";
+      if (!resolved) {
+        videoThumbInFlight.delete(filePath);
+        resolvePromise?.({ thumbnail: null, duration: null, error: true });
+      }
     };
   }, [filePath]);
 
@@ -375,16 +464,33 @@ export function ContentPreview({ item }: ContentPreviewProps) {
     }
     
     let cancelled = false;
-    checkFileExists(filePath)
-      .then((exists) => {
-        if (cancelled) return;
-        setFileExists(exists);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // On error, assume file doesn't exist
-        setFileExists(false);
-      });
+    const cached = fileExistsCache.get(filePath);
+    if (cached !== undefined) {
+      setFileExists(cached);
+      return;
+    }
+
+    let inFlight = fileExistsInFlight.get(filePath);
+    if (!inFlight) {
+      inFlight = checkFileExists(filePath)
+        .then((exists) => {
+          fileExistsCache.set(filePath, exists);
+          return exists;
+        })
+        .catch(() => {
+          fileExistsCache.set(filePath, false);
+          return false;
+        })
+        .finally(() => {
+          fileExistsInFlight.delete(filePath);
+        });
+      fileExistsInFlight.set(filePath, inFlight);
+    }
+
+    inFlight.then((exists) => {
+      if (cancelled) return;
+      setFileExists(exists);
+    });
     
     return () => {
       cancelled = true;
@@ -398,8 +504,31 @@ export function ContentPreview({ item }: ContentPreviewProps) {
     let cancelled = false;
     setImageLoading(true);
     setImageError(false);
-    
-    getImageData(item.id)
+
+    if (imageDataCache.has(item.id)) {
+      setImageDataUrl(imageDataCache.get(item.id) ?? null);
+      setImageLoading(false);
+      return;
+    }
+
+    let inFlight = imageDataInFlight.get(item.id);
+    if (!inFlight) {
+      inFlight = getImageData(item.id)
+        .then((dataUrl) => {
+          imageDataCache.set(item.id, dataUrl ?? null);
+          return dataUrl ?? null;
+        })
+        .catch((err) => {
+          imageDataCache.set(item.id, null);
+          throw err;
+        })
+        .finally(() => {
+          imageDataInFlight.delete(item.id);
+        });
+      imageDataInFlight.set(item.id, inFlight);
+    }
+
+    inFlight
       .then((dataUrl) => {
         if (cancelled) return;
         setImageDataUrl(dataUrl);

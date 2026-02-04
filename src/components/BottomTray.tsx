@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -176,6 +176,7 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
     </div>
   );
 }
+const MemoTrayCard = memo(TrayCard);
 
 interface BottomTrayProps {
   items: ClipboardItem[];
@@ -266,10 +267,10 @@ export function BottomTray(props: BottomTrayProps) {
                   height: isFloating ? cardHeight : "100%",
                 }}
               >
-                <TrayCard
+                <MemoTrayCard
                   item={item}
                   isSelected={props.selectedIds.has(item.id)}
-                  selectedCount={props.selectedIds.size}
+                  selectedCount={props.selectedIds.has(item.id) ? props.selectedIds.size : 0}
                   isTrashView={props.isTrashView}
                   onSelect={props.onSelect}
                   onCopy={props.onCopy}

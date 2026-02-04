@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::RunEvent;
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use uuid::Uuid;
@@ -3082,6 +3083,12 @@ pub fn run() {
             set_launch_at_startup,
             get_system_accent_color
         ])
+        .on_run_event(|app, event| match event {
+            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                let _ = db::optimize(app);
+            }
+            _ => {}
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

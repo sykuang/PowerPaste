@@ -139,7 +139,7 @@ pub fn export_now(app: &tauri::AppHandle) -> Result<(), String> {
 
     // Atomic-ish write.
     let tmp_path = file_path.with_extension("tmp");
-    let raw = serde_json::to_vec_pretty(&enc)
+    let raw = serde_json::to_vec(&enc)
         .map_err(|e| format!("failed to serialize encrypted file: {e}"))?;
     fs::write(&tmp_path, raw).map_err(|e| format!("failed to write tmp sync file: {e}"))?;
     fs::rename(&tmp_path, &file_path).map_err(|e| format!("failed to move sync file into place: {e}"))?;
@@ -158,13 +158,13 @@ pub fn import_now(app: &tauri::AppHandle) -> Result<u32, String> {
     };
 
     let file_path = sync_file_path(app, &folder)?;
-    let raw = match fs::read_to_string(&file_path) {
+    let raw = match fs::read(&file_path) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(e) => return Err(format!("failed to read sync file: {e}")),
     };
 
-    let enc: SyncEncryptedFile = serde_json::from_str(&raw)
+    let enc: SyncEncryptedFile = serde_json::from_slice(&raw)
         .map_err(|e| format!("failed to parse sync file: {e}"))?;
 
     let passphrase = settings_store::load_sync_passphrase()?

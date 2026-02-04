@@ -1,11 +1,63 @@
 use crate::models::{ClipboardItem, ClipboardItemKind};
 use crate::paths::db_path;
 use rusqlite::{params, Connection};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[path = "migrations/mod.rs"]
 mod migrations;
+
+const LIST_CACHE_SIZE: usize = 8;
+
+#[derive(Clone, Debug, PartialEq)]
+struct ListKey {
+    query: Option<String>,
+    limit: i64,
+}
+
+#[derive(Clone, Debug)]
+struct ListCacheEntry {
+    key: ListKey,
+    gen: u64,
+    items: Vec<ClipboardItem>,
+}
+
+static LIST_CACHE: OnceLock<Mutex<VecDeque<ListCacheEntry>>> = OnceLock::new();
+static CACHE_GEN: AtomicU64 = AtomicU64::new(0);
+
+fn list_cache() -> &'static Mutex<VecDeque<ListCacheEntry>> {
+    LIST_CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn bump_cache_gen() {
+    CACHE_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+fn list_cache_get(key: &ListKey) -> Option<Vec<ClipboardItem>> {
+    let gen = CACHE_GEN.load(Ordering::SeqCst);
+    let mut cache = list_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(pos) = cache.iter().position(|entry| entry.key == *key) {
+        let entry = cache.remove(pos)?;
+        if entry.gen == gen {
+            cache.push_front(entry.clone());
+            return Some(entry.items);
+        }
+    }
+    None
+}
+
+fn list_cache_set(key: ListKey, items: Vec<ClipboardItem>) {
+    let gen = CACHE_GEN.load(Ordering::SeqCst);
+    let mut cache = list_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|entry| entry.key != key);
+    cache.push_front(ListCacheEntry { key, gen, items });
+    while cache.len() > LIST_CACHE_SIZE {
+        cache.pop_back();
+    }
+}
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -21,6 +73,16 @@ fn open(app: &tauri::AppHandle) -> Result<Connection, String> {
             .map_err(|e| format!("failed to create db parent dir: {e}"))?;
     }
     let mut conn = Connection::open(path).map_err(|e| format!("failed to open sqlite db: {e}"))?;
+    conn.execute_batch(
+        "\
+        PRAGMA temp_store=MEMORY;\
+        PRAGMA cache_size=-20000;\
+        PRAGMA mmap_size=268435456;\
+        PRAGMA synchronous=NORMAL;\
+        PRAGMA foreign_keys=ON;\
+        ",
+    )
+    .map_err(|e| format!("failed to apply sqlite pragmas: {e}"))?;
     migrate(&mut conn)?;
     Ok(conn)
 }
@@ -74,6 +136,13 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
     }
 
     tx.commit().map_err(|e| format!("failed to commit migrations: {e}"))?;
+    Ok(())
+}
+
+pub fn optimize(app: &tauri::AppHandle) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute_batch("PRAGMA optimize;")
+        .map_err(|e| format!("failed to optimize sqlite: {e}"))?;
     Ok(())
 }
 
@@ -138,6 +207,8 @@ pub fn insert_text_with_source_app(
         )
         .map_err(|e| format!("failed to update item timestamp: {e}"))?;
 
+        bump_cache_gen();
+
         existing_item.created_at_ms = now;
         existing_item.is_trashed = None;
         existing_item.deleted_at_ms = None;
@@ -168,6 +239,8 @@ pub fn insert_text_with_source_app(
         params![item.id.to_string(), "text", item.text, item.created_at_ms, 0, Option::<String>::None, content_type, source_app_name, source_app_bundle_id],
     )
     .map_err(|e| format!("failed to insert item: {e}"))?;
+
+    bump_cache_gen();
 
     Ok(Some(item))
 }
@@ -241,6 +314,8 @@ pub fn insert_image_with_source_app(
         )
         .map_err(|e| format!("failed to update image timestamp: {e}"))?;
 
+        bump_cache_gen();
+
         // Verify the update worked
         let mut verify_stmt = conn
             .prepare("SELECT created_at_ms, pinboard, is_trashed FROM clipboard_items WHERE id = ?1")
@@ -303,6 +378,8 @@ pub fn insert_image_with_source_app(
     )
     .map_err(|e| format!("failed to insert image: {e}"))?;
 
+    bump_cache_gen();
+
     eprintln!("[powerpaste] image inserted into DB successfully, id={}, created_at_ms={}", item.id, item.created_at_ms);
     Ok(Some(item))
 }
@@ -319,7 +396,9 @@ pub fn touch_item(app: &tauri::AppHandle, id: Uuid) -> Result<bool, String> {
             params![now, id.to_string()],
         )
         .map_err(|e| format!("failed to touch item: {e}"))?;
-    
+    if rows_affected > 0 {
+        bump_cache_gen();
+    }
     Ok(rows_affected > 0)
 }
 
@@ -402,33 +481,86 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ClipboardItem, rusqlite::Error> {
     })
 }
 
+fn fts_query_from_user(query: &str) -> String {
+    let mut terms = Vec::new();
+    for raw in query.split_whitespace() {
+        let token: String = raw
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if token.is_empty() {
+            continue;
+        }
+        terms.push(format!("{token}*"));
+    }
+    terms.join(" AND ")
+}
+
 pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> Result<Vec<ClipboardItem>, String> {
-    let conn = open(app)?;
     let limit = limit.clamp(1, 5000) as i64;
+    let query_key = query
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let cache_key = ListKey {
+        query: query_key.clone(),
+        limit,
+    };
+    if let Some(cached) = list_cache_get(&cache_key) {
+        return Ok(cached);
+    }
+
+    let conn = open(app)?;
 
     let mut items = Vec::new();
     
     let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
-        let q = format!("%{}%", q.trim());
+        let fts_query = fts_query_from_user(&q);
+        if fts_query.is_empty() {
+            let q = format!("%{}%", q.trim());
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {} \
+                     FROM clipboard_items \
+                     WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
+                     ORDER BY pinned DESC, created_at_ms DESC \
+                     LIMIT ?2",
+                    base_cols
+                ))
+                .map_err(|e| format!("failed to prepare list query: {e}"))?;
+            let rows = stmt
+                .query_map(params![q, limit], row_to_item)
+                .map_err(|e| format!("failed to query items: {e}"))?;
+
+            for r in rows {
+                items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+            }
+            list_cache_set(cache_key, items.clone());
+            return Ok(items);
+        }
+
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {} \
                  FROM clipboard_items \
-                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) \
+                   AND rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ?1) \
                  ORDER BY pinned DESC, created_at_ms DESC \
                  LIMIT ?2",
                 base_cols
             ))
             .map_err(|e| format!("failed to prepare list query: {e}"))?;
         let rows = stmt
-            .query_map(params![q, limit], row_to_item)
+            .query_map(params![fts_query, limit], row_to_item)
             .map_err(|e| format!("failed to query items: {e}"))?;
 
         for r in rows {
             items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
         }
+        list_cache_set(cache_key, items.clone());
         return Ok(items);
     }
 
@@ -450,6 +582,7 @@ pub fn list_items(app: &tauri::AppHandle, limit: u32, query: Option<String>) -> 
         items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
     }
 
+    list_cache_set(cache_key, items.clone());
     Ok(items)
 }
 
@@ -481,6 +614,9 @@ pub fn upsert_items(app: &tauri::AppHandle, items: &[ClipboardItem]) -> Result<u
 
     tx.commit()
         .map_err(|e| format!("failed to commit transaction: {e}"))?;
+    if inserted > 0 {
+        bump_cache_gen();
+    }
     Ok(inserted)
 }
 
@@ -491,6 +627,7 @@ pub fn set_pinned(app: &tauri::AppHandle, id: Uuid, pinned: bool) -> Result<(), 
         params![if pinned { 1 } else { 0 }, id.to_string()],
     )
     .map_err(|e| format!("failed to update pinned: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -502,6 +639,7 @@ pub fn set_pinboard(app: &tauri::AppHandle, id: Uuid, pinboard: Option<String>) 
         params![pinboard, id.to_string()],
     )
     .map_err(|e| format!("failed to update pinboard: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -527,6 +665,7 @@ pub fn delete_item(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
     let conn = open(app)?;
     conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id.to_string()])
         .map_err(|e| format!("failed to delete item: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -539,6 +678,7 @@ pub fn trash_item(app: &tauri::AppHandle, id: Uuid) -> Result<(), String> {
         params![now, id.to_string()],
     )
     .map_err(|e| format!("failed to trash item: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -550,6 +690,7 @@ pub fn restore_from_trash(app: &tauri::AppHandle, id: Uuid) -> Result<(), String
         params![id.to_string()],
     )
     .map_err(|e| format!("failed to restore item: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -558,6 +699,7 @@ pub fn delete_item_forever(app: &tauri::AppHandle, id: Uuid) -> Result<(), Strin
     let conn = open(app)?;
     conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id.to_string()])
         .map_err(|e| format!("failed to delete item forever: {e}"))?;
+    bump_cache_gen();
     Ok(())
 }
 
@@ -567,6 +709,9 @@ pub fn empty_trash(app: &tauri::AppHandle) -> Result<u32, String> {
     let deleted = conn
         .execute("DELETE FROM clipboard_items WHERE is_trashed = 1", [])
         .map_err(|e| format!("failed to empty trash: {e}"))?;
+    if deleted > 0 {
+        bump_cache_gen();
+    }
     Ok(deleted as u32)
 }
 
@@ -639,13 +784,46 @@ pub fn list_items_paginated(
     let mut items = Vec::new();
 
     if let Some(q) = query.filter(|s| !s.trim().is_empty()) {
-        let q = format!("%{}%", q.trim());
+        let fts_query = fts_query_from_user(&q);
+        if fts_query.is_empty() {
+            let q = format!("%{}%", q.trim());
+            // Get total count for search
+            let total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM clipboard_items WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1)",
+                    params![q],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("failed to count items: {e}"))?;
+
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {} \
+                     FROM clipboard_items \
+                     WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
+                     ORDER BY pinned DESC, created_at_ms DESC \
+                     LIMIT ?2 OFFSET ?3",
+                    base_cols
+                ))
+                .map_err(|e| format!("failed to prepare paginated query: {e}"))?;
+            
+            let rows = stmt
+                .query_map(params![q, limit, offset], row_to_item)
+                .map_err(|e| format!("failed to query items: {e}"))?;
+
+            for r in rows {
+                items.push(r.map_err(|e| format!("failed to read row: {e}"))?);
+            }
+            return Ok((items, total as u32));
+        }
         
         // Get total count for search
         let total: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM clipboard_items WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1)",
-                params![q],
+                "SELECT COUNT(*) FROM clipboard_items \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) \
+                   AND rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ?1)",
+                params![fts_query],
                 |row| row.get(0),
             )
             .map_err(|e| format!("failed to count items: {e}"))?;
@@ -654,7 +832,8 @@ pub fn list_items_paginated(
             .prepare(&format!(
                 "SELECT {} \
                  FROM clipboard_items \
-                 WHERE (is_trashed IS NULL OR is_trashed = 0) AND (text LIKE ?1 OR content_type LIKE ?1) \
+                 WHERE (is_trashed IS NULL OR is_trashed = 0) \
+                   AND rowid IN (SELECT rowid FROM clipboard_items_fts WHERE clipboard_items_fts MATCH ?1) \
                  ORDER BY pinned DESC, created_at_ms DESC \
                  LIMIT ?2 OFFSET ?3",
                 base_cols
@@ -662,7 +841,7 @@ pub fn list_items_paginated(
             .map_err(|e| format!("failed to prepare paginated query: {e}"))?;
         
         let rows = stmt
-            .query_map(params![q, limit, offset], row_to_item)
+            .query_map(params![fts_query, limit, offset], row_to_item)
             .map_err(|e| format!("failed to query items: {e}"))?;
 
         for r in rows {
@@ -794,6 +973,9 @@ pub fn cleanup_old_items(app: &tauri::AppHandle, retention_days: i32, trash_enab
                 params![now, cutoff_ms],
             )
             .map_err(|e| format!("failed to trash old items: {e}"))?;
+        if affected > 0 {
+            bump_cache_gen();
+        }
         Ok(affected as u32)
     } else {
         // Permanently delete old items
@@ -804,6 +986,9 @@ pub fn cleanup_old_items(app: &tauri::AppHandle, retention_days: i32, trash_enab
                 params![cutoff_ms],
             )
             .map_err(|e| format!("failed to delete old items: {e}"))?;
+        if affected > 0 {
+            bump_cache_gen();
+        }
         Ok(affected as u32)
     }
 }
@@ -819,6 +1004,9 @@ pub fn cleanup_old_trash(app: &tauri::AppHandle, trash_retention_days: i32) -> R
             params![cutoff_ms],
         )
         .map_err(|e| format!("failed to cleanup old trash: {e}"))?;
+    if affected > 0 {
+        bump_cache_gen();
+    }
     Ok(affected as u32)
 }
 

@@ -27,9 +27,13 @@ export function useDominantColor(imageUrl: string | null): string | null {
       return;
     }
 
+    let cancelled = false;
+
     // Check cache first
     if (colorCache.has(imageUrl)) {
-      setColor(colorCache.get(imageUrl) || null);
+      if (!cancelled) {
+        setColor(colorCache.get(imageUrl) || null);
+      }
       return;
     }
 
@@ -37,6 +41,7 @@ export function useDominantColor(imageUrl: string | null): string | null {
     img.crossOrigin = "anonymous";
     
     img.onload = () => {
+      if (cancelled) return;
       try {
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");
@@ -107,7 +112,9 @@ export function useDominantColor(imageUrl: string | null): string | null {
 
         const hex = rgbToHex(boosted.r, boosted.g, boosted.b);
         colorCache.set(imageUrl, hex);
-        setColor(hex);
+        if (!cancelled) {
+          setColor(hex);
+        }
       } catch {
         // Canvas might fail due to CORS or other issues
       }
@@ -118,6 +125,10 @@ export function useDominantColor(imageUrl: string | null): string | null {
     };
 
     img.src = imageUrl;
+
+    return () => {
+      cancelled = true;
+    };
   }, [imageUrl]);
 
   return color;

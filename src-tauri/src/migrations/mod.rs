@@ -51,4 +51,37 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE clipboard_items ADD COLUMN pinboard TEXT DEFAULT NULL;\
         "
     ),
+    (
+        "007_add_perf_indexes",
+        "\
+        CREATE INDEX IF NOT EXISTS idx_clipboard_items_text ON clipboard_items(text);\
+        CREATE INDEX IF NOT EXISTS idx_clipboard_items_kind_text ON clipboard_items(kind, text);\
+        CREATE INDEX IF NOT EXISTS idx_clipboard_items_active_pinned_created_at \
+          ON clipboard_items(is_trashed, pinned, created_at_ms DESC);\
+        CREATE INDEX IF NOT EXISTS idx_clipboard_items_active_pinboard_created_at \
+          ON clipboard_items(is_trashed, pinboard, created_at_ms DESC);\
+        "
+    ),
+    (
+        "008_add_fts",
+        "\
+        CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_items_fts USING fts5(\
+          text,\
+          content_type,\
+          content='clipboard_items',\
+          content_rowid='rowid'\
+        );\
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ai AFTER INSERT ON clipboard_items BEGIN\
+          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type);\
+        END;\
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ad AFTER DELETE ON clipboard_items BEGIN\
+          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type);\
+        END;\
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_au AFTER UPDATE ON clipboard_items BEGIN\
+          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type);\
+          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type);\
+        END;\
+        INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES ('rebuild');\
+        "
+    ),
 ];

@@ -888,7 +888,47 @@ function App() {
     };
   }, [copySelected, selectAll, selectedIds]);
 
-  async function onCopy(item: ClipboardItem) {
+  const openPermissionsWindow = useCallback(async () => {
+    if (IS_PERMISSIONS_WINDOW || IS_SETTINGS_WINDOW) return;
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const existing = await WebviewWindow.getByLabel("permissions");
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
+        return;
+      }
+
+      // In dev mode, use the current origin; in production, use relative path
+      const isDev = window.location.hostname === "localhost";
+      const permissionsUrl = isDev 
+        ? `${window.location.origin}/?permissions=1`
+        : "index.html?permissions=1";
+
+      const win = new WebviewWindow("permissions", {
+        url: permissionsUrl,
+        title: "Setup — PowerPaste",
+        width: 520,
+        height: 480,
+        minWidth: 480,
+        minHeight: 400,
+        resizable: true,
+        decorations: false,
+        transparent: true,
+        shadow: false,
+      });
+
+      win.once("tauri://error", (e) => {
+        setSyncStatus(String((e as { payload?: unknown }).payload ?? "Failed to open Permissions"));
+        setTimeout(() => setSyncStatus(""), 5000);
+      });
+    } catch (e) {
+      setSyncStatus(String(e));
+      setTimeout(() => setSyncStatus(""), 5000);
+    }
+  }, []);
+
+  const onCopy = useCallback(async (item: ClipboardItem) => {
     console.log("[powerpaste] onCopy called for item:", item.id);
     let clearAfterMs = 1200;
     try {
@@ -910,9 +950,9 @@ function App() {
       clearAfterMs = 5000;
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
-  }
+  }, []);
 
-  async function onPaste(item: ClipboardItem) {
+  const onPaste = useCallback(async (item: ClipboardItem) => {
     console.log("[powerpaste] onPaste called for item:", item.id, item.text.substring(0, 50));
     let clearAfterMs = 1200;
     try {
@@ -929,7 +969,7 @@ function App() {
     } finally {
       setTimeout(() => setSyncStatus(""), clearAfterMs);
     }
-  }
+  }, [openPermissionsWindow]);
 
   // TODO: Wire up sync button in UI when sync feature is fully implemented
   // async function onSyncNow() {
@@ -979,46 +1019,6 @@ function App() {
       // Best-effort: if window creation fails, surface it in status.
       win.once("tauri://error", (e) => {
         setSyncStatus(String((e as { payload?: unknown }).payload ?? "Failed to open Settings"));
-        setTimeout(() => setSyncStatus(""), 5000);
-      });
-    } catch (e) {
-      setSyncStatus(String(e));
-      setTimeout(() => setSyncStatus(""), 5000);
-    }
-  }
-
-  async function openPermissionsWindow() {
-    if (IS_PERMISSIONS_WINDOW || IS_SETTINGS_WINDOW) return;
-    try {
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      const existing = await WebviewWindow.getByLabel("permissions");
-      if (existing) {
-        await existing.show();
-        await existing.setFocus();
-        return;
-      }
-
-      // In dev mode, use the current origin; in production, use relative path
-      const isDev = window.location.hostname === "localhost";
-      const permissionsUrl = isDev 
-        ? `${window.location.origin}/?permissions=1`
-        : "index.html?permissions=1";
-
-      const win = new WebviewWindow("permissions", {
-        url: permissionsUrl,
-        title: "Setup — PowerPaste",
-        width: 520,
-        height: 480,
-        minWidth: 480,
-        minHeight: 400,
-        resizable: true,
-        decorations: false,
-        transparent: true,
-        shadow: false,
-      });
-
-      win.once("tauri://error", (e) => {
-        setSyncStatus(String((e as { payload?: unknown }).payload ?? "Failed to open Permissions"));
         setTimeout(() => setSyncStatus(""), 5000);
       });
     } catch (e) {
