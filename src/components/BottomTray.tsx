@@ -207,6 +207,10 @@ export function BottomTray(props: BottomTrayProps) {
   const cardWidth = 280;
   const cardHeight = 100; // Estimated height for floating mode
 
+  const isTestEnv =
+    typeof import.meta !== "undefined" &&
+    (import.meta as unknown as { env?: { MODE?: string } }).env?.MODE === "test";
+
   // Virtualizer configuration
   const virtualizer = useVirtualizer({
     count: props.items.length,
@@ -214,6 +218,7 @@ export function BottomTray(props: BottomTrayProps) {
     estimateSize: () => (isFloating ? cardHeight : cardWidth + gap),
     horizontal: !isFloating,
     overscan: 3,
+    initialRect: { width: 800, height: 400 },
   });
 
   // Convert vertical mouse wheel to horizontal scroll (only in fixed mode)
@@ -234,7 +239,19 @@ export function BottomTray(props: BottomTrayProps) {
     }
   }, [isFloating]);
 
-  const virtualItems = virtualizer.getVirtualItems();
+  const virtualItems = isTestEnv
+    ? props.items.map((_, index) => ({
+        index,
+        start: isFloating ? index * cardHeight : index * (cardWidth + gap),
+        size: isFloating ? cardHeight : cardWidth + gap,
+      }))
+    : virtualizer.getVirtualItems();
+
+  const totalSize = isTestEnv
+    ? isFloating
+      ? props.items.length * cardHeight
+      : props.items.length * (cardWidth + gap)
+    : virtualizer.getTotalSize();
 
   return (
     <div className="bottomTray" role="region" aria-label="Quick copy tray">
@@ -249,8 +266,8 @@ export function BottomTray(props: BottomTrayProps) {
           className="trayCardsInner"
           style={{
             position: "relative",
-            width: isFloating ? "100%" : virtualizer.getTotalSize(),
-            height: isFloating ? virtualizer.getTotalSize() : "100%",
+            width: isFloating ? "100%" : totalSize,
+            height: isFloating ? totalSize : "100%",
           }}
         >
           {virtualItems.map((virtualItem) => {

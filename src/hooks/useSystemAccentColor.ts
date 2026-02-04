@@ -47,6 +47,10 @@ function applyAccentColor(hexColor: string) {
  */
 export function useSystemAccentColor() {
   useEffect(() => {
+    if (typeof window === "undefined" || !(window as unknown as { __TAURI__?: unknown }).__TAURI__) {
+      return;
+    }
+
     // Fetch initial accent color
     invoke<string>("get_system_accent_color")
       .then((color) => {
