@@ -277,7 +277,6 @@ impl ClipboardWatcher {
                         sleep_ms = 250;
                     }
                 }
-                }
 
                 // Fall back to text
                 if !handled {
