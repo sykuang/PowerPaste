@@ -71,16 +71,19 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
           content='clipboard_items',\
           content_rowid='rowid'\
         );\
-        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ai AFTER INSERT ON clipboard_items BEGIN\
-          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type);\
-        END;\
-        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ad AFTER DELETE ON clipboard_items BEGIN\
-          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type);\
-        END;\
-        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_au AFTER UPDATE ON clipboard_items BEGIN\
-          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type);\
-          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type);\
-        END;\
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ai AFTER INSERT ON clipboard_items \
+        BEGIN \
+          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type); \
+        END; \
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_ad AFTER DELETE ON clipboard_items \
+        BEGIN \
+          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type); \
+        END; \
+        CREATE TRIGGER IF NOT EXISTS clipboard_items_fts_au AFTER UPDATE ON clipboard_items \
+        BEGIN \
+          INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, text, content_type) VALUES ('delete', old.rowid, old.text, old.content_type); \
+          INSERT INTO clipboard_items_fts(rowid, text, content_type) VALUES (new.rowid, new.text, new.content_type); \
+        END; \
         INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES ('rebuild');\
         "
     ),
