@@ -3,8 +3,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { ClipboardItem } from "../api";
-import { ContentPreview } from "./ContentPreview";
 import { AppIcon } from "./AppIcon";
+import { ContentPreview } from "./ContentPreview";
+import { formatBytes } from "../utils";
 
 interface TrayCardProps {
   item: ClipboardItem;
@@ -95,8 +96,7 @@ function TrayCard({ item, isSelected, selectedCount, isTrashView, onSelect, onCo
         if (label) parts.push(label);
       }
       if (item.image_size_bytes) {
-        const kb = item.image_size_bytes / 1024;
-        parts.push(kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`);
+        parts.push(formatBytes(item.image_size_bytes));
       }
     } else if (item.content_type === "url") {
       parts.push("Link");

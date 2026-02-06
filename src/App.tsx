@@ -29,10 +29,7 @@ import {
   type Settings,
 } from "./api";
 import "./App.css";
-import { SettingsModal } from "./components/SettingsModal";
-import { PermissionsModal } from "./components/PermissionsModal";
-import { BottomTray } from "./components/BottomTray";
-import { SaveToPinboardModal } from "./components/SaveToPinboardModal";
+import { BottomTray, PermissionsModal, SaveToPinboardModal, SettingsModal } from "./components";
 import { useSystemAccentColor } from "./hooks/useSystemAccentColor";
 
 const IS_SETTINGS_WINDOW =
