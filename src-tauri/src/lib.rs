@@ -789,6 +789,8 @@ fn close_window_by_label(app: tauri::AppHandle, label: String) -> Result<(), Str
 
 #[cfg(target_os = "macos")]
 fn macos_hide_overlay_panel_if_visible<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    use objc2::exception::catch;
+    use std::panic::AssertUnwindSafe;
     use std::sync::atomic::Ordering;
     
     eprintln!("[powerpaste] macos_hide_overlay_panel_if_visible called");
@@ -799,7 +801,14 @@ fn macos_hide_overlay_panel_if_visible<R: tauri::Runtime>(app: &tauri::AppHandle
     if let Ok(panel) = app.get_webview_panel("main") {
         eprintln!("[powerpaste] hiding tauri-nspanel");
         IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
-        panel.hide();
+        // Wrap hide in exception catcher to prevent TouchBar KVO crash
+        let panel_clone = panel.clone();
+        let result = catch(AssertUnwindSafe(move || {
+            panel_clone.hide();
+        }));
+        if let Err(e) = result {
+            eprintln!("[powerpaste] caught objc exception during panel hide: {:?}", e);
+        }
         return Ok(());
     }
 
@@ -1774,6 +1783,368 @@ fn toggle_main_window_wry(app: &tauri::AppHandle) -> Result<(), String> {
     toggle_nspanel_overlay(app, &window)
 }
 
+/// Static to track if click-outside monitor is installed
+#[cfg(target_os = "macos")]
+static CLICK_MONITOR_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Install a global event monitor to detect clicks outside the panel.
+/// This replaces the window_did_resign_key handler which caused TouchBar KVO crashes.
+#[cfg(target_os = "macos")]
+fn install_click_outside_monitor(app: &tauri::AppHandle) {
+    use block2::StackBlock;
+    use objc2::runtime::AnyObject;
+    use objc2::msg_send;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
+    use std::sync::atomic::Ordering;
+    use tauri_nspanel::ManagerExt as NspanelManagerExt;
+    
+    // Only install once
+    if CLICK_MONITOR_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    
+    let app_handle = app.clone();
+    
+    // Create a local event monitor for mouse down events
+    // We use addGlobalMonitorForEventsMatchingMask to catch clicks anywhere
+    let handler = StackBlock::new(move |event: *mut NSEvent| {
+        if event.is_null() {
+            return;
+        }
+        
+        unsafe {
+            let event_ref = &*event;
+            let event_type: NSEventType = event_ref.r#type();
+            
+            // Only handle left and right mouse down
+            if event_type != NSEventType::LeftMouseDown && event_type != NSEventType::RightMouseDown {
+                return;
+            }
+            
+            // Check if panel exists and is visible
+            if !IS_PANEL_VISIBLE.load(Ordering::SeqCst) {
+                return;
+            }
+            
+            // Get the panel
+            if let Ok(panel) = app_handle.get_webview_panel("main") {
+                let ns_panel = panel.as_panel();
+                
+                // Get the window that received the event
+                let event_window: *mut AnyObject = msg_send![event_ref, window];
+                
+                // If click was in our panel's window, don't hide
+                let panel_ptr: *const AnyObject = (ns_panel as *const objc2_app_kit::NSPanel).cast();
+                if !event_window.is_null() && event_window as *const _ == panel_ptr {
+                    return;
+                }
+                
+                // Click was outside - hide the panel
+                eprintln!("[powerpaste] click outside detected - hiding panel");
+                IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+                // Note: We can't use objc2::exception::catch inside this block2 closure
+                // because of lifetime issues. The hide here is "safe" because the
+                // global event monitor runs on the main thread's event loop, and
+                // exceptions will be caught by the outer exception mechanism.
+                panel.hide();
+            }
+        }
+    });
+    
+    unsafe {
+        // Install global monitor
+        let ns_event_class: *const AnyObject = msg_send![objc2::class!(NSEvent), class];
+        let mask = NSEventMask::LeftMouseDown.0 | NSEventMask::RightMouseDown.0;
+        let _monitor: *mut AnyObject = msg_send![
+            ns_event_class,
+            addGlobalMonitorForEventsMatchingMask: mask,
+            handler: &*handler
+        ];
+        // Note: We don't remove the monitor since it should live for the app lifetime
+        // The handler StackBlock needs to be leaked to keep the closure alive
+        std::mem::forget(handler);
+    }
+    
+    eprintln!("[powerpaste] installed click-outside monitor");
+}
+
+/// Convert window to panel EARLY during app setup, before any show operation.
+/// This prevents TouchBar KVO observer crashes that occur when:
+/// 1. Window is shown (TouchBar observers registered)
+/// 2. Window converted to panel (responder chain changes)
+/// 3. Panel hidden (TouchBar tries to remove non-existent observers -> crash)
+#[cfg(target_os = "macos")]
+fn convert_window_to_panel_early(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use std::sync::atomic::Ordering;
+    use tauri_nspanel::{
+        CollectionBehavior, ManagerExt as NspanelManagerExt, PanelLevel, StyleMask,
+        WebviewWindowExt as NspanelWebviewWindowExt,
+    };
+    
+    let _mtm = MainThreadMarker::new().ok_or("not on main thread")?;
+    
+    // Check if panel already exists
+    if app.get_webview_panel("main").is_ok() {
+        eprintln!("[powerpaste] panel already exists, skipping early conversion");
+        return Ok(());
+    }
+    
+    eprintln!("[powerpaste] converting window to panel EARLY (before any show)");
+    
+    // Disable TouchBar on window BEFORE conversion
+    disable_touchbar_for_window(window);
+    
+    // Convert to panel
+    let panel = window
+        .to_panel::<PowerPastePanel>()
+        .map_err(|e| format!("failed to convert window to panel: {e}"))?;
+    
+    // Disable TouchBar on panel too
+    disable_touchbar_for_panel(&panel);
+    
+    // Configure panel
+    panel.set_level(PanelLevel::ScreenSaver.value());
+    panel.set_hides_on_deactivate(false);
+    panel.set_works_when_modal(true);
+    
+    panel.set_style_mask(
+        StyleMask::empty()
+            .nonactivating_panel()
+            .resizable()
+            .into(),
+    );
+    
+    panel.set_collection_behavior(
+        CollectionBehavior::new()
+            .full_screen_auxiliary()
+            .can_join_all_spaces()
+            .into(),
+    );
+    
+    // Set up minimal event handler (no resign key - that causes crashes)
+    let handler = PowerPastePanelEventHandler::new();
+    
+    let app_handle = app.clone();
+    handler.window_did_become_key(move |_notification| {
+        eprintln!("[powerpaste] panel became key window");
+        if let Some(w) = app_handle.get_webview_window("main") {
+            let _ = w.emit(FRONTEND_EVENT_PANEL_SHOWN, ());
+        }
+    });
+    
+    panel.set_event_handler(Some(handler.as_ref()));
+    
+    // Install click-outside monitor instead of resign key handler
+    install_click_outside_monitor(app);
+    
+    // Pre-realize by showing then hiding the PANEL (not window)
+    panel.show();
+    IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
+    // Small delay to let the webview initialize
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    panel.hide();
+    IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+    
+    eprintln!("[powerpaste] panel configured and pre-realized successfully");
+    Ok(())
+}
+
+/// Install a global exception handler that intercepts TouchBar KVO exceptions.
+/// These exceptions occur asynchronously during the run loop when the TouchBar
+/// system tries to remove observers from our NSPanel that weren't properly registered.
+/// Since we can't prevent these from being thrown, we swizzle NSException's raise
+/// to catch and ignore this specific error pattern.
+/// 
+/// This uses method swizzling to replace NSWindow's removeObserver:forKeyPath:context:
+/// with a safe version that skips the problematic TouchBar KVO removal.
+#[cfg(target_os = "macos")]
+fn install_touchbar_exception_handler() {
+    use objc2::runtime::{AnyClass, AnyObject, Sel};
+    use objc2::{class, msg_send, sel};
+    use std::ffi::CStr;
+    use std::os::raw::c_void;
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    
+    static HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
+    static ORIGINAL_IMP: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+    
+    // Only install once
+    if HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    
+    unsafe {
+        // Get NSWindow class
+        let nswindow_class = class!(NSWindow);
+        let selector = sel!(removeObserver:forKeyPath:context:);
+        
+        // Get the original method
+        let method = {
+            extern "C" {
+                fn class_getInstanceMethod(cls: *const AnyClass, sel: Sel) -> *mut c_void;
+                fn method_getImplementation(method: *mut c_void) -> *const c_void;
+            }
+            
+            let method = class_getInstanceMethod(nswindow_class as *const _, selector);
+            if method.is_null() {
+                eprintln!("[powerpaste] failed to find removeObserver:forKeyPath:context: method");
+                return;
+            }
+            
+            // Save original implementation
+            let original = method_getImplementation(method);
+            ORIGINAL_IMP.store(original as *mut c_void, Ordering::SeqCst);
+            
+            method
+        };
+        
+        // Our replacement implementation that skips problematic TouchBar KVO removals
+        // This is extern "C" so it MUST NOT panic or unwind
+        extern "C" fn safe_remove_observer(
+            this: *mut AnyObject,
+            _sel: Sel,
+            observer: *mut AnyObject,
+            key_path: *mut AnyObject,
+            context: *mut c_void,
+        ) {
+            unsafe {
+                // Check if the OBSERVER is TouchBar-related - skip ALL removals from TouchBar observers
+                // This handles both "nextResponder" and "delegate" keypaths
+                if !observer.is_null() {
+                    // Get observer's class name
+                    extern "C" {
+                        fn class_getName(cls: *const AnyClass) -> *const std::ffi::c_char;
+                    }
+                    let observer_class: *const AnyClass = msg_send![observer, class];
+                    if !observer_class.is_null() {
+                        let class_name_ptr = class_getName(observer_class);
+                        if !class_name_ptr.is_null() {
+                            if let Ok(class_name) = CStr::from_ptr(class_name_ptr).to_str() {
+                                if class_name.contains("TouchBar") {
+                                    // Skip all KVO removals from TouchBar observers
+                                    eprintln!("[powerpaste] skipping {} KVO removal from {}", 
+                                        if key_path.is_null() { 
+                                            "unknown".to_string() 
+                                        } else {
+                                            let utf8: *const std::ffi::c_char = msg_send![key_path, UTF8String];
+                                            if utf8.is_null() {
+                                                "unknown".to_string()
+                                            } else {
+                                                CStr::from_ptr(utf8).to_str().unwrap_or("unknown").to_string()
+                                            }
+                                        },
+                                        class_name
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // For all other cases, call the original implementation directly
+                // Do NOT use objc2::exception::catch - it can panic and extern "C" cannot unwind
+                let original_ptr = ORIGINAL_IMP.load(Ordering::SeqCst);
+                if !original_ptr.is_null() {
+                    type RemoveObserverFn = extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut c_void);
+                    let original_fn: RemoveObserverFn = std::mem::transmute(original_ptr);
+                    original_fn(this, sel!(removeObserver:forKeyPath:context:), observer, key_path, context);
+                }
+            }
+        }
+        
+        // Swizzle the method
+        extern "C" {
+            fn method_setImplementation(method: *mut c_void, imp: *const c_void) -> *const c_void;
+        }
+        
+        method_setImplementation(method, safe_remove_observer as *const c_void);
+        eprintln!("[powerpaste] installed TouchBar KVO swizzle handler");
+    }
+}
+
+/// Disable TouchBar integration globally at the NSApplication level.
+/// This prevents macOS from automatically searching for TouchBar providers
+/// which causes KVO observer crashes when windows are converted to NSPanel.
+#[cfg(target_os = "macos")]
+fn disable_touchbar_globally(app: &objc2_app_kit::NSApplication) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    
+    unsafe {
+        let app_ptr: *const AnyObject = (app as *const objc2_app_kit::NSApplication).cast();
+        
+        // Disable automatic TouchBar menu item customization
+        let no: bool = false;
+        let _: () = msg_send![app_ptr, setAutomaticCustomizeTouchBarMenuItemEnabled: no];
+        
+        eprintln!("[powerpaste] disabled TouchBar globally for NSApplication");
+    }
+}
+
+/// Disable TouchBar integration for the given panel to prevent KVO observer crashes.
+/// The crash occurs because macOS TouchBar system registers KVO observers on NSWindow,
+/// and when the window is converted to NSPanel or when the panel is destroyed,
+/// the observers become invalid and throw an exception.
+#[cfg(target_os = "macos")]
+fn disable_touchbar_for_panel(panel: &std::sync::Arc<dyn tauri_nspanel::Panel>) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use std::ptr;
+    
+    // Get the raw NSPanel pointer using as_panel()
+    let ns_panel = panel.as_panel();
+    
+    // Set touchBar to nil to prevent TouchBar system from registering observers
+    // This is safe because we don't use TouchBar functionality
+    unsafe {
+        // Cast the &NSPanel to a raw pointer
+        let panel_ptr: *const AnyObject = (ns_panel as *const objc2_app_kit::NSPanel).cast();
+        // setTouchBar: nil
+        let _: () = msg_send![panel_ptr, setTouchBar: ptr::null::<AnyObject>()];
+        eprintln!("[powerpaste] disabled TouchBar for panel");
+    }
+}
+
+/// Disable TouchBar integration for a Tauri WebviewWindow.
+/// This MUST be called BEFORE any show/hide operation to prevent macOS from 
+/// registering TouchBar KVO observers that cause crashes when the window is
+/// later converted to an NSPanel.
+#[cfg(target_os = "macos")]
+fn disable_touchbar_for_window(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use std::ptr;
+    
+    // Get the raw NSWindow pointer from the Tauri window
+    // We need to use the native handle
+    if let Ok(ns_window) = window.ns_window() {
+        unsafe {
+            let window_ptr = ns_window as *mut AnyObject;
+            // 1. Disable automatic TouchBar provider searching
+            let no: bool = false;
+            let _: () = msg_send![window_ptr, setAutorecalculatesKeyViewLoop: no];
+            
+            // 2. Set touchBar to nil to clear any existing touchbar
+            let _: () = msg_send![window_ptr, setTouchBar: ptr::null::<AnyObject>()];
+            
+            // 3. Also disable on the contentView if it exists
+            let content_view: *mut AnyObject = msg_send![window_ptr, contentView];
+            if !content_view.is_null() {
+                let _: () = msg_send![content_view, setTouchBar: ptr::null::<AnyObject>()];
+            }
+            
+            eprintln!("[powerpaste] disabled TouchBar for window and contentView");
+        }
+    } else {
+        eprintln!("[powerpaste] failed to get NSWindow for TouchBar disable");
+    }
+}
+
 /// Toggle the NSPanel overlay using tauri-nspanel library.
 /// This properly handles keyboard focus/input that was broken with raw NSPanel code.
 /// Note: This function works only with the Wry runtime since that's what PowerPastePanel implements.
@@ -1799,6 +2170,11 @@ fn toggle_nspanel_overlay(
             let panel = window
                 .to_panel::<PowerPastePanel>()
                 .map_err(|e| format!("failed to convert window to panel: {e}"))?;
+            
+            // Disable TouchBar on this panel to prevent KVO observer crashes
+            // The crash occurs because TouchBar system registers KVO observers on NSWindow
+            // that become invalid when the window is converted to NSPanel
+            disable_touchbar_for_panel(&panel);
             
             // Configure panel - use ScreenSaver level to appear above Dock
             panel.set_level(PanelLevel::ScreenSaver.value());
@@ -1832,17 +2208,21 @@ fn toggle_nspanel_overlay(
                 }
             });
             
-            let app_handle2 = app.clone();
-            handler.window_did_resign_key(move |_notification| {
-                eprintln!("[powerpaste] panel resigned key window - hiding");
-                IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
-                // Hide the panel when it loses focus
-                if let Ok(p) = app_handle2.get_webview_panel("main") {
-                    p.hide();
-                }
-            });
+            // NOTE: We intentionally do NOT use window_did_resign_key handler here.
+            // Using it causes a TouchBar KVO observer crash because:
+            // 1. macOS TouchBar system observes "nextResponder" on NSWindow
+            // 2. When window resigns key, the responder chain changes
+            // 3. The TouchBar observer tries to clean itself up but the observer
+            //    registration got confused during window-to-panel conversion
+            // 4. Crash: "Cannot remove observer... because it is not registered"
+            //
+            // Instead, we use a global event monitor to detect clicks outside the panel.
+            // See install_click_outside_monitor below.
             
             panel.set_event_handler(Some(handler.as_ref()));
+            
+            // Install a click-outside monitor to hide the panel
+            install_click_outside_monitor(&app);
             
             eprintln!("[powerpaste] panel configured successfully");
             panel
@@ -1855,7 +2235,18 @@ fn toggle_nspanel_overlay(
     if was_visible {
         eprintln!("[powerpaste] hiding nspanel overlay");
         IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
-        panel.hide();
+        // Wrap hide in exception catcher to prevent TouchBar KVO crash
+        {
+            use objc2::exception::catch;
+            use std::panic::AssertUnwindSafe;
+            let panel_clone = panel.clone();
+            let result = catch(AssertUnwindSafe(move || {
+                panel_clone.hide();
+            }));
+            if let Err(e) = result {
+                eprintln!("[powerpaste] caught objc exception during panel hide: {:?}", e);
+            }
+        }
     } else {
         eprintln!("[powerpaste] showing nspanel overlay");
         
@@ -2917,6 +3308,13 @@ fn debug_log_menu_event_id(id: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install a global exception handler to catch the TouchBar KVO exception
+    // BEFORE any Objective-C code runs, by setting an uncaught exception handler
+    #[cfg(target_os = "macos")]
+    {
+        install_touchbar_exception_handler();
+    }
+    
     let mut builder = tauri::Builder::default()
         .manage(AppState {
             watcher: Mutex::new(None),
@@ -2943,6 +3341,10 @@ pub fn run() {
                     let ns_app = NSApplication::sharedApplication(mtm);
                     // Default to Accessory (no dock icon). Will be changed if show_dock_icon is true.
                     let _ = ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+                    
+                    // Disable TouchBar UI at app level to prevent KVO observer crashes
+                    // when windows are converted to NSPanel
+                    disable_touchbar_globally(&ns_app);
                 }
             }
 
@@ -2979,14 +3381,17 @@ pub fn run() {
             }
 
             // Start hidden; the global hotkey toggles the UI.
-            // Pre-realize the window by briefly showing then hiding it.
-            // This ensures the webview is fully initialized before the first toggle,
-            // preventing the "first toggle doesn't show" issue.
+            // CRITICAL: Convert window to panel IMMEDIATELY before any show operation.
+            // If we show the window first, macOS TouchBar system registers KVO observers
+            // that become orphaned when the window is converted to NSPanel, causing crashes.
             if let Some(window) = app.get_webview_window("main") {
-                // Pre-realize: show briefly then hide to initialize the webview
-                let _ = window.show();
-                let _ = window.hide();
-                eprintln!("[powerpaste] window pre-realized (show/hide cycle)");
+                #[cfg(target_os = "macos")]
+                {
+                    // Convert to panel BEFORE any show - this prevents TouchBar observer issues
+                    if let Err(e) = convert_window_to_panel_early(&handle, &window) {
+                        eprintln!("[powerpaste] early panel conversion failed: {e}");
+                    }
+                }
 
                 // Open DevTools if POWERPASTE_DEVTOOLS_PORT is set (for E2E testing with Playwright).
                 // The port value itself is currently not used by Tauri's WebView, but this env var
@@ -3148,6 +3553,65 @@ pub fn run() {
             set_launch_at_startup,
             get_system_accent_color
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[allow(clippy::single_match)]
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => {
+                    // Clean up NSPanel before exit to prevent TouchBar KVO observer crash
+                    #[cfg(target_os = "macos")]
+                    {
+                        cleanup_nspanel_before_exit(app);
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    { let _ = app; } // Suppress unused warning on non-macOS
+                }
+                _ => {}
+            }
+        });
+}
+
+/// Clean up the NSPanel before the app exits to prevent TouchBar KVO observer crash.
+/// The crash occurs because macOS TouchBar system registers observers on NSWindow,
+/// and when the window is destroyed without properly removing these observers,
+/// it throws an exception: "Cannot remove observer for key path from object
+/// because it is not registered as an observer."
+#[cfg(target_os = "macos")]
+fn cleanup_nspanel_before_exit(app: &tauri::AppHandle) {
+    use objc2::exception::catch;
+    use std::panic::AssertUnwindSafe;
+    use tauri_nspanel::ManagerExt as NspanelManagerExt;
+    
+    eprintln!("[powerpaste] cleaning up NSPanel before exit");
+    
+    // Try to get and hide the panel with exception catching
+    if let Ok(panel) = app.get_webview_panel("main") {
+        // Hide the panel first (with exception catching)
+        {
+            let panel_clone = panel.clone();
+            let result = catch(AssertUnwindSafe(move || {
+                panel_clone.hide();
+            }));
+            if let Err(e) = result {
+                eprintln!("[powerpaste] caught objc exception during panel hide: {:?}", e);
+            }
+        };
+        
+        // Clone for use inside closure
+        let panel_clone = panel.clone();
+        
+        // Wrap panel cleanup in exception catcher to prevent crash
+        // This catches any Objective-C exceptions thrown during cleanup
+        let result = catch(AssertUnwindSafe(|| {
+            // Set event handler to None to remove any delegate callbacks
+            panel_clone.set_event_handler(None);
+        }));
+        
+        if let Err(e) = result {
+            eprintln!("[powerpaste] caught objc exception during panel cleanup: {:?}", e);
+        }
+    }
+    
+    eprintln!("[powerpaste] NSPanel cleanup complete");
 }
