@@ -115,6 +115,9 @@ function App() {
   const [editingPinboardName, setEditingPinboardName] = useState("");
   const [showIconPicker, setShowIconPicker] = useState<{ pinboard: string | null } | null>(null); // null = clipboard
 
+  // Scroll reset key: incremented to tell BottomTray to scroll back to start
+  const [scrollResetKey, setScrollResetKey] = useState(0);
+
   // Trash view state
   const [showTrash, setShowTrash] = useState(false);
   const [trashCount, setTrashCount] = useState(0);
@@ -790,6 +793,8 @@ function App() {
     void (async () => {
       unlisten = await listen("powerpaste://panel_shown", () => {
         console.log("[powerpaste] panel_shown event received, focusing search input");
+        // Reset scroll to beginning so newest items are visible
+        setScrollResetKey((k) => k + 1);
         // Multiple attempts with increasing delays to ensure focus works
         const focusInput = () => {
           const input = searchInputRef.current;
@@ -821,6 +826,8 @@ function App() {
         // Switch to Clipboard tab when new clipboard content arrives
         // (new items always go to clipboard, not pinboards)
         setActivePinboard(null);
+        // Reset scroll to beginning so the new item is visible
+        setScrollResetKey((k) => k + 1);
         void reload();
       });
       unlisten = h;
@@ -1348,6 +1355,7 @@ function App() {
         activePinboard={activePinboard}
         isTrashView={showTrash}
         uiMode={uiMode}
+        scrollResetKey={scrollResetKey}
         onPinboardChange={setActivePinboard}
         onSelect={selectItem}
         onCopy={onCopy}

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -188,6 +188,7 @@ interface BottomTrayProps {
   pinboards: string[];
   activePinboard: string | null; // null = Clipboard
   isTrashView: boolean;
+  scrollResetKey?: number;
   onPinboardChange: (pinboard: string | null) => void;
   onSelect: (item: ClipboardItem, opts?: { additive?: boolean; range?: boolean }) => void;
   onCopy: (item: ClipboardItem) => void;
@@ -224,6 +225,21 @@ export function BottomTray(props: BottomTrayProps) {
     overscan: 3,
     initialRect: { width: 800, height: 400 },
   });
+
+  // Reset scroll position to beginning when scrollResetKey changes
+  // (e.g. panel shown, new items arrive, pinboard change)
+  useEffect(() => {
+    const el = trayCardsRef.current;
+    if (el) {
+      // Use scrollTo if available (browser), fall back to direct property set (JSDOM)
+      if (typeof el.scrollTo === "function") {
+        el.scrollTo({ left: 0, top: 0 });
+      } else {
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
+      }
+    }
+  }, [props.scrollResetKey]);
 
   // Convert vertical mouse wheel to horizontal scroll (only in fixed mode)
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {

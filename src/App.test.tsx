@@ -210,7 +210,8 @@ describe("App", () => {
     const cards = Array.from(tray.querySelectorAll<HTMLElement>(".trayCard"));
     expect(cards.length).toBeGreaterThan(0);
 
-    const expectedId = "1";
+    // Item "2" is pinned so it sorts first in the tray
+    const expectedId = "2";
 
     fireEvent.doubleClick(cards[0]!);
 
