@@ -181,6 +181,10 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const filteredQuery = useMemo(() => query.trim(), [query]);
+  const filteredQueryRef = useRef(filteredQuery);
+  useEffect(() => {
+    filteredQueryRef.current = filteredQuery;
+  }, [filteredQuery]);
 
   const trayItems = useMemo(() => {
     let filtered = [...items];
@@ -527,7 +531,7 @@ function App() {
       const result = await listTrashedItems({ limit: 500, offset: 0 });
       setItems(result.items);
     } else {
-      const it = await listItems({ limit: 500, query: filteredQuery || undefined });
+      const it = await listItems({ limit: 500, query: filteredQueryRef.current || undefined });
       setItems(it);
     }
   }
@@ -793,6 +797,8 @@ function App() {
     void (async () => {
       unlisten = await listen("powerpaste://panel_shown", () => {
         console.log("[powerpaste] panel_shown event received, focusing search input");
+        // Reload items using the latest query (via ref) so filtered results stay in sync
+        void reload();
         // Reset scroll to beginning so newest items are visible
         setScrollResetKey((k) => k + 1);
         // Multiple attempts with increasing delays to ensure focus works

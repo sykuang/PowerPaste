@@ -243,7 +243,7 @@ fn macos_get_cursor_position() -> Option<(f64, f64)> {
 
 /// Find the screen that contains the mouse cursor.
 #[cfg(target_os = "macos")]
-#[allow(dead_code, deprecated)]
+#[allow(deprecated)]
 fn macos_screen_containing_cursor(mtm: objc2::MainThreadMarker) -> Option<objc2::rc::Retained<objc2_app_kit::NSScreen>> {
     use objc2_app_kit::NSScreen;
     
@@ -725,7 +725,7 @@ fn macos_resize_overlay_panel_if_present(width: u32, height: u32) -> Result<(), 
     target.origin.y = screen_frame.origin.y;
 
     exception::catch(std::panic::AssertUnwindSafe(|| {
-        panel.setFrame_display(target, true);
+        panel.setFrame_display(target, false);
     }))
     .map_err(|e| format!("objective-c exception resizing panel: {e:?}"))?;
 
@@ -1941,13 +1941,42 @@ fn convert_window_to_panel_early(
     // Install click-outside monitor instead of resign key handler
     install_click_outside_monitor(app);
     
-    // Pre-realize by showing then hiding the PANEL (not window)
+    // Pre-realize by showing then hiding the PANEL (not window).
+    // Use alpha=0 so the brief show is completely invisible to the user.
+    // Also set the correct frame before showing to avoid stale geometry.
+    {
+        use objc2_app_kit::NSScreen;
+        use objc2_foundation::NSRect;
+        let pre_mtm = MainThreadMarker::new().unwrap();
+        if let Some(screen) = macos_screen_containing_cursor(pre_mtm)
+            .or_else(|| NSScreen::mainScreen(pre_mtm))
+        {
+            let sf: NSRect = screen.frame();
+            let ui_mode = get_current_ui_mode();
+            let (pw, ph) = overlay_size_for_monitor(
+                sf.size.width.max(1.0).round() as u32,
+                sf.size.height.max(1.0).round() as u32,
+                ui_mode,
+            );
+            let mut pre_frame = sf;
+            pre_frame.size.width = (pw as f64).min(sf.size.width);
+            pre_frame.size.height = (ph as f64).min(sf.size.height);
+            pre_frame.origin.x = sf.origin.x + (sf.size.width - pre_frame.size.width) / 2.0;
+            pre_frame.origin.y = sf.origin.y; // bottom
+            panel.set_alpha_value(0.0);
+            panel.as_panel().setFrame_display(pre_frame, false);
+        } else {
+            panel.set_alpha_value(0.0);
+        }
+    }
     panel.show();
     IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
     // Small delay to let the webview initialize
     std::thread::sleep(std::time::Duration::from_millis(50));
     panel.hide();
     IS_PANEL_VISIBLE.store(false, Ordering::SeqCst);
+    // Restore alpha for future shows
+    panel.set_alpha_value(1.0);
     
     eprintln!("[powerpaste] panel configured and pre-realized successfully");
     Ok(())
@@ -2257,7 +2286,9 @@ fn toggle_nspanel_overlay(
         }
         
         // Position and size the panel based on UI mode
-        if let Some(screen) = NSScreen::mainScreen(mtm) {
+        if let Some(screen) = macos_screen_containing_cursor(mtm)
+            .or_else(|| NSScreen::mainScreen(mtm))
+        {
             let screen_frame: NSRect = screen.frame();
             let ui_mode = get_current_ui_mode();
             let (w, h) = overlay_size_for_monitor(
@@ -2297,13 +2328,18 @@ fn toggle_nspanel_overlay(
                 }
             };
             
-            // Set size and position on the underlying window
-            if let Some(tauri_window) = panel.to_window() {
-                tauri_window.set_size(tauri::LogicalSize::new(w, h)).ok();
-                // Tauri uses screen coordinates where y=0 is top
-                let tauri_y = screen_frame.size.height - h as f64 - y;
-                tauri_window.set_position(tauri::LogicalPosition::new(x as i32, tauri_y as i32)).ok();
-                eprintln!("[powerpaste] panel sized to {}x{} at ({}, {}) [ui_mode={:?}]", w, h, x, tauri_y, ui_mode);
+            // Set frame atomically using Cocoa API (avoids two-step Tauri set_size + set_position
+            // which can flash the panel at the wrong position for one frame).
+            {
+                use objc2_foundation::{NSPoint, NSSize, NSRect as CRect};
+                let target_frame = CRect {
+                    origin: NSPoint { x, y },
+                    size: NSSize { width: w as f64, height: h as f64 },
+                };
+                // Hide with alpha before positioning to avoid any visible flash
+                panel.set_alpha_value(0.0);
+                panel.as_panel().setFrame_display(target_frame, false);
+                eprintln!("[powerpaste] panel sized to {}x{} at ({}, {}) [ui_mode={:?}]", w, h, x, y, ui_mode);
             }
         }
         
@@ -2312,9 +2348,10 @@ fn toggle_nspanel_overlay(
         #[allow(deprecated)]
         ns_app.activateIgnoringOtherApps(true);
         
-        // Show and make key
+        // Show and make key, then restore alpha
         IS_PANEL_VISIBLE.store(true, Ordering::SeqCst);
         panel.show_and_make_key();
+        panel.set_alpha_value(1.0);
         
         // Emit panel shown event
         let _ = window.emit(FRONTEND_EVENT_PANEL_SHOWN, ());
@@ -2422,8 +2459,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         app.activateIgnoringOtherApps(true);
 
         // Recompute frame each show (handles display changes, fullscreen spaces, etc.).
-        let screen = panel
-            .screen()
+        let screen = macos_screen_containing_cursor(mtm)
+            .or_else(|| panel.screen())
             .or_else(|| NSScreen::mainScreen(mtm))
             .ok_or("no screen found")?;
         let screen_frame: NSRect = screen.frame();
@@ -2459,8 +2496,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
                 }
             }
             models::UiMode::Fixed => {
-                // Fixed at bottom, 90% screen width, centered
-                target.size.width = screen_frame.size.width * 0.9;
+                // Fixed at bottom, use FIXED_WIDTH_FRACTION for consistency with first-show
                 target.origin.x = screen_frame.origin.x + (screen_frame.size.width - target.size.width) / 2.0;
                 target.origin.y = screen_frame.origin.y;
             }
@@ -2471,9 +2507,14 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         // would incorrectly hide the newly-shown panel.
         PANEL_SHOW_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
+        // Hide with alpha before repositioning to prevent visible flash
+        unsafe {
+            let _: () = objc2::msg_send![&*panel, setAlphaValue: 0.0f64];
+        }
+
         exception::catch(std::panic::AssertUnwindSafe(|| {
             panel.setLevel(NSScreenSaverWindowLevel);
-            panel.setFrame_display(target, true);
+            panel.setFrame_display(target, false);
             panel.orderFrontRegardless();
             panel.makeKeyWindow();
             // Make the WryWebView first responder so text inputs receive keyboard events
@@ -2520,6 +2561,11 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             }
         }))
         .map_err(|e| format!("objective-c exception showing panel: {e:?}"))?;
+
+        // Restore alpha now that frame is committed
+        unsafe {
+            let _: () = objc2::msg_send![&*panel, setAlphaValue: 1.0f64];
+        }
 
         let level = panel.level();
         let frame = panel.frame();
@@ -2576,8 +2622,8 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
     // Create the panel using the screen's full frame, then move the existing
     // contentView (WKWebView) into it.
-    let screen = ns_window
-        .screen()
+    let screen = macos_screen_containing_cursor(mtm)
+        .or_else(|| ns_window.screen())
         .or_else(|| NSScreen::mainScreen(mtm))
         .ok_or("no screen found")?;
 
@@ -2612,8 +2658,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             }
         }
         models::UiMode::Fixed => {
-            // Fixed at bottom, 90% screen width, centered
-            target.size.width = screen_frame.size.width * 0.9;
+            // Fixed at bottom, use FIXED_WIDTH_FRACTION for consistency
             target.origin.x = screen_frame.origin.x + (screen_frame.size.width - target.size.width) / 2.0;
             target.origin.y = screen_frame.origin.y;
         }
@@ -2788,9 +2833,14 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
 
+    // Hide with alpha before repositioning to prevent visible flash
+    unsafe {
+        let _: () = objc2::msg_send![&*panel, setAlphaValue: 0.0f64];
+    }
+
     exception::catch(std::panic::AssertUnwindSafe(|| {
         panel.setLevel(NSScreenSaverWindowLevel);
-        panel.setFrame_display(target, true);
+        panel.setFrame_display(target, false);
         panel.orderFrontRegardless();
         panel.makeKeyWindow();
         // Make the WryWebView first responder so text inputs receive keyboard events
@@ -2839,6 +2889,11 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         }
     }))
     .map_err(|e| format!("objective-c exception showing panel: {e:?}"))?;
+
+    // Restore alpha now that frame is committed
+    unsafe {
+        let _: () = objc2::msg_send![&*panel, setAlphaValue: 1.0f64];
+    }
 
     let level = panel.level();
     let frame = panel.frame();
