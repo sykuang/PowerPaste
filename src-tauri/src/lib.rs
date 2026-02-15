@@ -1433,6 +1433,8 @@ fn paste_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let is_file = item.kind == ClipboardItemKind::File
         || item.content_type.as_deref() == Some("file");
 
+    eprintln!("[powerpaste] paste_item: id={}, kind={:?}, content_type={:?}, is_file={}", id, item.kind, item.content_type, is_file);
+
     if is_file {
         let paths_str = item.file_paths.clone().unwrap_or_else(|| item.text.clone());
         let paths: Vec<String> = paths_str
@@ -1441,7 +1443,9 @@ fn paste_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
+        eprintln!("[powerpaste] paste_item: setting {} file paths on clipboard", paths.len());
         clipboard::set_clipboard_files(&paths)?;
+        eprintln!("[powerpaste] paste_item: file paths set successfully");
     } else if item.kind == ClipboardItemKind::Image {
         let (bytes, mime) = db::get_image_encoded_bytes(&app, uuid)?
             .ok_or_else(|| "image data missing for item".to_string())?;

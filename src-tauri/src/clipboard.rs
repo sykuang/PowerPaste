@@ -2,8 +2,6 @@ use crate::db;
 use crate::macos_query_frontmost_app_info;
 use arboard::{Clipboard, ImageData};
 use std::borrow::Cow;
-use std::fs;
-use uuid::Uuid;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -64,43 +62,57 @@ fn text_hash(text: &str) -> u64 {
 /// Returns a list of file paths if files are on the clipboard
 #[cfg(target_os = "macos")]
 fn get_clipboard_file_urls() -> Option<Vec<String>> {
-    use std::process::Command;
-    
-    // Use Swift to read file URLs from NSPasteboard
-    let swift_code = r#"
-import Cocoa
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
 
-let pasteboard = NSPasteboard.general
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let file_url_type = NSString::from_str("public.file-url");
 
-// Check for file URLs
-if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
-    if !urls.isEmpty {
-        for url in urls {
-            print(url.path)
+    let items = pasteboard.pasteboardItems()?;
+    let mut paths = Vec::new();
+
+    for item in items.iter() {
+        if let Some(url_string) = item.stringForType(&file_url_type) {
+            let url_str = url_string.to_string();
+            // Convert file:// URL to path
+            if let Some(path) = url_str.strip_prefix("file://") {
+                // URL-decode the path (e.g., %20 -> space)
+                let decoded = percent_decode(path);
+                if !decoded.is_empty() {
+                    paths.push(decoded);
+                }
+            }
         }
+    }
+
+    if !paths.is_empty() {
+        Some(paths)
+    } else {
+        None
     }
 }
-"#;
-    
-    let output = Command::new("swift")
-        .args(["-e", swift_code])
-        .output()
-        .ok()?;
-    
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let paths: Vec<String> = stdout
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-        
-        if !paths.is_empty() {
-            return Some(paths);
+
+/// Simple percent-decoding for file URL paths
+#[cfg(target_os = "macos")]
+fn percent_decode(input: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                &input[i + 1..i + 3],
+                16,
+            ) {
+                result.push(byte);
+                i += 3;
+                continue;
+            }
         }
+        result.push(bytes[i]);
+        i += 1;
     }
-    
-    None
+    String::from_utf8(result).unwrap_or_else(|_| input.to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -110,47 +122,31 @@ fn get_clipboard_file_urls() -> Option<Vec<String>> {
 
 #[cfg(target_os = "macos")]
 fn get_clipboard_image_encoded() -> Option<db::EncodedImage> {
-    use std::process::Command;
-    use base64::Engine;
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
 
-    let swift_code = r#"
-import Cocoa
-import Foundation
+    let pasteboard = NSPasteboard::generalPasteboard();
 
-let pasteboard = NSPasteboard.general
-let types: [(String, String)] = [
-  ("public.png", "image/png"),
-  ("public.jpeg", "image/jpeg"),
-  ("org.webmproject.webp", "image/webp"),
-  ("public.tiff", "image/tiff"),
-]
+    // Check for image types in order of preference
+    let types: &[(&str, &str)] = &[
+        ("public.png", "image/png"),
+        ("public.jpeg", "image/jpeg"),
+        ("org.webmproject.webp", "image/webp"),
+        ("public.tiff", "image/tiff"),
+    ];
 
-for (uti, mime) in types {
-  let pbType = NSPasteboard.PasteboardType(uti)
-  if let data = pasteboard.data(forType: pbType) {
-    print("MIME:\(mime)")
-    print(data.base64EncodedString())
-    exit(0)
-  }
-}
-"#;
-
-    let output = Command::new("swift")
-        .args(["-e", swift_code])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
+    for (uti, mime) in types {
+        let pb_type = NSString::from_str(uti);
+        if let Some(data) = pasteboard.dataForType(&pb_type) {
+            // Safety: we hold the Retained<NSData> so it won't be mutated
+            let bytes = unsafe { data.as_bytes_unchecked() };
+            return Some(db::EncodedImage {
+                bytes: bytes.to_vec(),
+                mime: mime.to_string(),
+            });
+        }
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let mime_line = lines.next()?;
-    let b64 = lines.next().unwrap_or("");
-    let mime = mime_line.strip_prefix("MIME:")?.to_string();
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    Some(db::EncodedImage { bytes, mime })
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -171,39 +167,16 @@ fn mime_to_uti(mime: &str) -> Option<&'static str> {
 
 #[cfg(target_os = "macos")]
 fn set_clipboard_image_encoded_macos(bytes: &[u8], uti: &str) -> Result<(), String> {
-    use std::process::Command;
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::{NSData, NSString};
 
-    let filename = format!("powerpaste-image-{}.bin", Uuid::new_v4());
-    let path = std::env::temp_dir().join(filename);
-    fs::write(&path, bytes).map_err(|e| format!("failed to write temp image: {e}"))?;
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
 
-    let path_str = path.to_string_lossy().replace('"', "\\\"");
-    let swift_code = format!(
-        r#"
-import Cocoa
-import Foundation
+    let ns_data = NSData::with_bytes(bytes);
+    let pb_type = NSString::from_str(uti);
 
-let pasteboard = NSPasteboard.general
-pasteboard.clearContents()
-let data = try Data(contentsOf: URL(fileURLWithPath: "{path}"))
-let pbType = NSPasteboard.PasteboardType("{uti}")
-let ok = pasteboard.setData(data, forType: pbType)
-if !ok {{
-  exit(2)
-}}
-"#,
-        path = path_str,
-        uti = uti
-    );
-
-    let output = Command::new("swift")
-        .args(["-e", &swift_code])
-        .output()
-        .map_err(|e| format!("failed to run swift for image clipboard: {e}"))?;
-
-    let _ = fs::remove_file(&path);
-
-    if output.status.success() {
+    if pasteboard.setData_forType(Some(&ns_data), &pb_type) {
         Ok(())
     } else {
         Err("failed to set image clipboard with original format".to_string())
@@ -496,56 +469,43 @@ fn set_clipboard_image_decoded(encoded_bytes: &[u8]) -> Result<(), String> {
 /// Write file paths to the clipboard (macOS: as file URLs that Finder can paste)
 #[cfg(target_os = "macos")]
 pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
-    use std::process::Command;
-    
+    use objc2::msg_send;
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::{NSArray, NSString, NSURL};
+
     if paths.is_empty() {
         return Err("no file paths provided".to_string());
     }
-    
-    // Use Swift to properly set NSPasteboard with file URLs
-    // This ensures Finder can paste the files correctly
-    let mut swift_code = String::from(r#"
-import Cocoa
 
-let pasteboard = NSPasteboard.general
-pasteboard.clearContents()
+    eprintln!("[powerpaste] set_clipboard_files: writing {} paths", paths.len());
 
-var urls: [URL] = []
-"#);
-    
-    for path in paths.iter() {
-        // Escape the path for Swift string literal
-        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
-        swift_code.push_str(&format!(
-            "urls.append(URL(fileURLWithPath: \"{}\"))\n",
-            escaped
-        ));
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+
+    let urls: Vec<_> = paths
+        .iter()
+        .map(|p| {
+            eprintln!("[powerpaste] set_clipboard_files: path={}", p);
+            NSURL::fileURLWithPath(&NSString::from_str(p))
+        })
+        .collect();
+
+    let url_refs: Vec<&NSURL> = urls.iter().map(|u| u.as_ref()).collect();
+    let array = NSArray::from_slice(&url_refs);
+
+    // Use msg_send! to call writeObjects: directly, avoiding the generic type cast.
+    // Safety: NSURL implements NSPasteboardWriting (declared in objc2-app-kit).
+    let ok: bool = unsafe { msg_send![&*pasteboard, writeObjects: &*array] };
+    eprintln!("[powerpaste] set_clipboard_files: writeObjects returned {}", ok);
+
+    if !ok {
+        return Err("writeObjects returned false".to_string());
     }
-    
-    swift_code.push_str(r#"
-pasteboard.writeObjects(urls as [NSPasteboardWriting])
-"#);
-    
-    let output = Command::new("swift")
-        .args(["-e", &swift_code])
-        .output()
-        .map_err(|e| format!("failed to run swift: {e}"))?;
-    
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("swift failed: {stderr}"));
-    }
-    
+
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
     Err("file clipboard is only supported on macOS".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
-    // TODO: Implement for Windows using OLE clipboard with CF_HDROP format
-    Err("file clipboard not yet implemented on this platform".to_string())
 }

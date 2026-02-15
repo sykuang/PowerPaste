@@ -42,8 +42,8 @@ zeroize = "1"
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 objc2 = { version = "0.6", features = ["exception"] }
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSScreen", "NSApplication", "NSRunningApplication", "NSPanel", "NSView", "NSGraphics", "NSResponder", "NSEvent", "NSPasteboard", "NSTouchBar", "block2"] }
-objc2-foundation = { version = "0.3", features = ["NSGeometry", "objc2-core-foundation", "NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSScreen", "NSApplication", "NSRunningApplication", "NSPanel", "NSView", "NSGraphics", "NSResponder", "NSEvent", "NSPasteboard", "NSPasteboardItem", "NSTouchBar", "block2"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "objc2-core-foundation", "NSString", "NSArray", "NSURL", "NSData"] }
 block2 = "0.6"
 core-graphics = "0.25.0"
 
