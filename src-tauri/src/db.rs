@@ -179,7 +179,7 @@ pub fn insert_text_with_source_app(
     // Check if this exact text already exists anywhere in the clipboard
     // Also check for file items since file paths can be read as text by arboard
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE (kind = 'text' OR kind = 'file' OR content_type = 'file') AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE (kind = 'text' OR kind = 'file' OR content_type = 'file') AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -293,7 +293,7 @@ pub fn insert_image_with_source_app(
     
     // Check if we already have this image anywhere (by hash stored in text field)
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE kind = 'image' AND text = ?1 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
@@ -843,7 +843,7 @@ pub fn list_items_paginated(
     let limit = limit.clamp(1, 100) as i64;
     let offset = offset as i64;
 
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     let mut items = Vec::new();
 
@@ -956,7 +956,7 @@ pub fn list_pinboard_items_paginated(
     let limit = limit.clamp(1, 100) as i64;
     let offset = offset as i64;
 
-    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
+    let base_cols = "id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms";
 
     let mut items = Vec::new();
 
