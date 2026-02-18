@@ -7,6 +7,8 @@ interface PermissionsModalProps {
   onRecheck: () => Promise<void>;
   onOpenAccessibility: () => void;
   onOpenAutomation: () => void;
+  onRequestAccessibility: () => Promise<void>;
+  onRequestAutomation: () => Promise<void>;
   closeOnBackdrop?: boolean;
 }
 
@@ -61,40 +63,54 @@ export function PermissionsModal(props: PermissionsModalProps) {
           <div className="section">
             <div className="label">Grant permissions</div>
             <div className="rowInline equalButtons">
-              <button className="btn" onClick={props.onOpenAccessibility}>
-                Open Accessibility
-              </button>
-              <button className="btn" onClick={props.onOpenAutomation}>
-                Open Automation
-              </button>
+              {!status?.accessibility_ok ? (
+                <button className="btnPrimary" onClick={() => void props.onRequestAccessibility()}>
+                  Request Accessibility
+                </button>
+              ) : (
+                <button className="btn" disabled>
+                  ✓ Accessibility
+                </button>
+              )}
+              {!status?.automation_ok ? (
+                <button className="btnPrimary" onClick={() => void props.onRequestAutomation()}>
+                  Request Automation
+                </button>
+              ) : (
+                <button className="btn" disabled>
+                  ✓ Automation
+                </button>
+              )}
+            </div>
+
+            <div className="hint">
+              Clicking each button will show a macOS system dialog. Click <strong>"Open System Preferences"</strong> when
+              prompted, then <strong>enable the toggle</strong> for PowerPaste.
             </div>
             
             {status?.is_bundled === false ? (
               <>
                 <div className="warningInline">
-                  ⚠️ Running in <strong>development mode</strong>. You need to add the debug binary to permissions:
+                  ⚠️ Running in <strong>development mode</strong>. The system dialog may not work for unsigned binaries.
                 </div>
                 <div className="hint" style={{ fontFamily: "monospace", fontSize: 11, wordBreak: "break-all" }}>
                   {status.executable_path}
                 </div>
-                <ol className="hintList">
-                  <li><strong>Accessibility:</strong> Click +, press Cmd+Shift+G, paste the path above, and enable it.</li>
-                  <li><strong>Automation:</strong> The binary should appear after running — enable "System Events".</li>
-                </ol>
-              </>
-            ) : (
-              <>
                 <div className="hint">
-                  <strong>Important:</strong> Make sure to add <strong>PowerPaste.app</strong> to both lists.
+                  If the prompt doesn't appear, manually add the binary path above in System Settings.
                 </div>
-                <ol className="hintList">
-                  <li><strong>Accessibility:</strong> Click +, navigate to Applications, select PowerPaste.app, and enable it.</li>
-                  <li><strong>Automation:</strong> Find PowerPaste in the list and enable "System Events".</li>
-                </ol>
+                <div className="rowInline equalButtons">
+                  <button className="btn" onClick={props.onOpenAccessibility}>
+                    Open Accessibility Settings
+                  </button>
+                  <button className="btn" onClick={props.onOpenAutomation}>
+                    Open Automation Settings
+                  </button>
+                </div>
               </>
-            )}
+            ) : null}
             <div className="hint">
-              After granting permissions, <strong>restart PowerPaste</strong> for changes to take effect.
+              After granting permissions, click <strong>Re-check</strong> below to verify.
             </div>
           </div>
         ) : null}
@@ -111,13 +127,21 @@ export function PermissionsModal(props: PermissionsModalProps) {
             <button 
               className="btnPrimary" 
               disabled={props.checking} 
-              onClick={() => {
-                props.onOpenAccessibility();
-                // Also open Automation after a short delay
-                setTimeout(() => props.onOpenAutomation(), 500);
+              onClick={async () => {
+                if (!status?.accessibility_ok) {
+                  await props.onRequestAccessibility();
+                }
+                if (!status?.automation_ok) {
+                  // Small delay so prompts don't stack
+                  await new Promise(r => setTimeout(r, 500));
+                  await props.onRequestAutomation();
+                }
+                // Re-check after requesting
+                await new Promise(r => setTimeout(r, 1000));
+                await props.onRecheck();
               }}
             >
-              Open System Settings
+              Grant Permissions
             </button>
           )}
         </div>

@@ -181,6 +181,16 @@ export async function openAutomationSettings(): Promise<void> {
   return invoke("open_automation_settings");
 }
 
+/** Trigger the macOS Accessibility permission prompt (auto-adds app to list). Returns current trusted status. */
+export async function requestAccessibilityPermission(): Promise<boolean> {
+  return invoke("request_accessibility_permission");
+}
+
+/** Trigger the macOS Automation permission prompt via test osascript. Returns true if already granted. */
+export async function requestAutomationPermission(): Promise<boolean> {
+  return invoke("request_automation_permission");
+}
+
 export async function syncNow(): Promise<{ imported: number }> {
   return invoke("sync_now");
 }

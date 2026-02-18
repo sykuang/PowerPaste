@@ -1477,14 +1477,12 @@ fn check_permissions() -> Result<PermissionsStatus, String> {
             .unwrap_or_default();
         let is_bundled = exe_path.contains(".app/Contents/MacOS/");
 
-        // Check Accessibility permission using AXIsProcessTrusted
-        // This checks if THIS process has accessibility access
+        // Check Accessibility permission using AXIsProcessTrusted (silent check)
         let accessibility_ok: bool = unsafe {
             #[link(name = "ApplicationServices", kind = "framework")]
             extern "C" {
                 fn AXIsProcessTrusted() -> u8;
             }
-            
             let result = AXIsProcessTrusted();
             eprintln!("[powerpaste] AXIsProcessTrusted returned: {}", result);
             result != 0
@@ -1592,6 +1590,102 @@ fn open_automation_settings() -> Result<(), String> {
             .status()
             .map_err(|e| format!("failed to open Automation settings: {e}"))?;
         return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Not supported on this platform".to_string())
+    }
+}
+
+/// Trigger the macOS Accessibility permission prompt via AXIsProcessTrustedWithOptions.
+/// This shows the system dialog and auto-adds the app to the Accessibility list.
+#[tauri::command]
+fn request_accessibility_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let trusted: bool = unsafe {
+            #[link(name = "CoreFoundation", kind = "framework")]
+            extern "C" {
+                fn CFStringCreateWithCString(
+                    alloc: *const std::ffi::c_void,
+                    c_str: *const u8,
+                    encoding: u32,
+                ) -> *const std::ffi::c_void;
+                fn CFDictionaryCreate(
+                    alloc: *const std::ffi::c_void,
+                    keys: *const *const std::ffi::c_void,
+                    values: *const *const std::ffi::c_void,
+                    num_values: isize,
+                    key_callbacks: *const std::ffi::c_void,
+                    value_callbacks: *const std::ffi::c_void,
+                ) -> *const std::ffi::c_void;
+                fn CFRelease(cf: *const std::ffi::c_void);
+                static kCFBooleanTrue: *const std::ffi::c_void;
+                static kCFTypeDictionaryKeyCallBacks: u8;
+                static kCFTypeDictionaryValueCallBacks: u8;
+            }
+
+            #[link(name = "ApplicationServices", kind = "framework")]
+            extern "C" {
+                fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> u8;
+            }
+
+            // "AXTrustedCheckOptionPrompt" — the key that triggers the prompt
+            let key_cstr = b"AXTrustedCheckOptionPrompt\0";
+            let key = CFStringCreateWithCString(
+                std::ptr::null(),
+                key_cstr.as_ptr(),
+                0x08000100, // kCFStringEncodingUTF8
+            );
+
+            let keys = [key];
+            let values = [kCFBooleanTrue];
+            let dict = CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &kCFTypeDictionaryKeyCallBacks as *const u8 as *const std::ffi::c_void,
+                &kCFTypeDictionaryValueCallBacks as *const u8 as *const std::ffi::c_void,
+            );
+
+            let result = AXIsProcessTrustedWithOptions(dict);
+            eprintln!("[powerpaste] AXIsProcessTrustedWithOptions(prompt:true) returned: {}", result);
+
+            CFRelease(dict);
+            CFRelease(key);
+
+            result != 0
+        };
+        return Ok(trusted);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Not supported on this platform".to_string())
+    }
+}
+
+/// Trigger the macOS Automation permission prompt by running a test osascript
+/// targeting System Events. This causes macOS to show the "allow control" dialog.
+#[tauri::command]
+fn request_automation_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"System Events\" to return 1",
+            ])
+            .output()
+            .map_err(|e| format!("failed to run osascript: {e}"))?;
+
+        let ok = output.status.success();
+        if !ok {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[powerpaste] request_automation_permission osascript stderr: {}", stderr);
+        }
+        return Ok(ok);
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -3607,6 +3701,8 @@ pub fn run() {
             check_permissions,
             open_accessibility_settings,
             open_automation_settings,
+            request_accessibility_permission,
+            request_automation_permission,
             sync_now,
             set_show_dock_icon,
             set_launch_at_startup,

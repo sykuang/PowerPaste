@@ -18,6 +18,8 @@ import {
   openAutomationSettings,
   pasteItem,
   hideMainWindow,
+  requestAccessibilityPermission,
+  requestAutomationPermission,
   restoreFromTrash,
   setItemPinboard,
   setItemPinned,
@@ -1108,6 +1110,8 @@ function App() {
           }}
           onOpenAccessibility={() => void openAccessibilitySettings()}
           onOpenAutomation={() => void openAutomationSettings()}
+          onRequestAccessibility={async () => { await requestAccessibilityPermission(); }}
+          onRequestAutomation={async () => { await requestAutomationPermission(); }}
         />
       </div>
     );
