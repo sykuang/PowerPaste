@@ -6,6 +6,7 @@ import { ClipboardItem } from "../api";
 import { AppIcon } from "./AppIcon";
 import { ContentPreview } from "./ContentPreview";
 import { formatBytes } from "../utils";
+import { useAutoHideScrollbar } from "../hooks/useAutoHideScrollbar";
 
 interface TrayCardProps {
   item: ClipboardItem;
@@ -206,6 +207,9 @@ interface BottomTrayProps {
 export function BottomTray(props: BottomTrayProps) {
   const trayCardsRef = useRef<HTMLDivElement>(null);
   const isFloating = props.uiMode === "floating";
+
+  // Auto-hide scrollbar overlay
+  useAutoHideScrollbar(trayCardsRef);
 
   // Gap between cards (matches CSS clamp values)
   const gap = 12; // Use max value from clamp(6px, 0.6vw, 12px)

@@ -30,6 +30,13 @@
   --pp-accent-glow: rgba(37, 99, 235, 0.15);
   --pp-danger-text: #b91c1c;
   --pp-danger-border: rgba(239, 68, 68, 0.35);
+
+  /* Scrollbar tokens (macOS overlay style) */
+  --pp-scrollbar-size: 6px;
+  --pp-scrollbar-thumb: rgba(15, 23, 42, 0.25);
+  --pp-scrollbar-thumb-hover: rgba(15, 23, 42, 0.45);
+  --pp-scrollbar-track: transparent;
+
   /* Tray fills available height below header (header ~44px) */
   --tray-h: calc(100vh - 50px);
 }
@@ -61,6 +68,9 @@ html[data-theme="light"] {
   --pp-accent-border: rgba(37, 99, 235, 0.35);
   --pp-accent-soft: rgba(37, 99, 235, 0.10);
   --pp-accent-glow: rgba(37, 99, 235, 0.15);
+  --pp-scrollbar-thumb: rgba(15, 23, 42, 0.25);
+  --pp-scrollbar-thumb-hover: rgba(15, 23, 42, 0.45);
+  --pp-scrollbar-track: transparent;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -87,6 +97,65 @@ html[data-theme="dark"] {
   --pp-accent-glow: rgba(59, 130, 246, 0.25);
   --pp-danger-text: #fca5a5;
   --pp-danger-border: rgba(239, 68, 68, 0.40);
+  --pp-scrollbar-thumb: rgba(255, 255, 255, 0.25);
+  --pp-scrollbar-thumb-hover: rgba(255, 255, 255, 0.45);
+  --pp-scrollbar-track: transparent;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   GLOBAL SCROLLBAR — macOS overlay style
+   Thin translucent pill, visible only while scrolling (via [data-scrolling]).
+   Components that intentionally hide scrollbars (e.g. .topbarCenter) override
+   these with scrollbar-width:none / display:none.
+   ══════════════════════════════════════════════════════════════════════════════ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pp-scrollbar-thumb) var(--pp-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--pp-scrollbar-size);
+  height: var(--pp-scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--pp-scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--pp-scrollbar-thumb);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--pp-scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+/* Auto-hide: thumb invisible by default, shown via JS [data-scrolling] attr */
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  transition: background-color 0.3s ease;
+}
+
+[data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: var(--pp-scrollbar-thumb);
+}
+
+[data-scrolling="true"]::-webkit-scrollbar-thumb:hover {
+  background-color: var(--pp-scrollbar-thumb-hover);
+}
+
+/* Also show scrollbar when hovering the container (mouse over) */
+*:hover::-webkit-scrollbar-thumb {
+  background-color: var(--pp-scrollbar-thumb);
+}
+
+*:hover::-webkit-scrollbar-thumb:hover {
+  background-color: var(--pp-scrollbar-thumb-hover);
 }
 
 * {
@@ -883,6 +952,7 @@ body {
 .settingsContent {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 16px 24px 24px;
   display: flex;
   flex-direction: column;
@@ -1459,9 +1529,6 @@ html[data-theme="dark"] .settingsWarning {
   overflow-x: auto;
   overflow-y: hidden;
   /* scroll-snap disabled for virtualization */
-  scrollbar-width: thin;
-  scrollbar-color: var(--pp-muted) var(--pp-border-xweak);
-  /* Force scrollbar to always be visible on macOS */
   -webkit-overflow-scrolling: touch;
   /* Align items to stretch to fill container height */
   align-items: stretch;
@@ -1482,26 +1549,17 @@ html[data-theme="dark"] .settingsWarning {
   height: 100%;
 }
 
-/* Always show scrollbar when content overflows */
+/* Horizontal scrollbar sizing override for fixed-mode tray */
 .trayCards::-webkit-scrollbar {
   height: 8px;
-  display: block;
 }
 
 .trayCards::-webkit-scrollbar-track {
-  background: var(--pp-border-weak);
-  border-radius: 999px;
   margin: 0 14px;
 }
 
 .trayCards::-webkit-scrollbar-thumb {
-  background: var(--pp-muted);
-  border-radius: 999px;
   min-width: 40px;
-}
-
-.trayCards::-webkit-scrollbar-thumb:hover {
-  background: var(--pp-text);
 }
 
 .trayCard {
@@ -1745,6 +1803,7 @@ html[data-theme="dark"] .settingsWarning {
   flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   /* scroll-snap disabled for virtualization */
   height: 100%;
   gap: 8px;
@@ -1806,12 +1865,7 @@ html[data-theme="dark"] .settingsWarning {
   font-size: 10px;
 }
 
-/* Floating mode scrollbar */
-.ui-mode-floating .trayCards::-webkit-scrollbar {
-  width: 6px;
-  height: auto;
-}
-
+/* Floating mode scrollbar sizing */
 .ui-mode-floating .trayCards::-webkit-scrollbar-track {
   margin: 8px 0;
 }

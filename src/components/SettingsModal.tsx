@@ -17,6 +17,7 @@ import {
   disconnectSyncProvider,
 } from "../api";
 import { PowerPasteLogo } from "./PowerPasteLogo";
+import { useAutoHideScrollbar } from "../hooks/useAutoHideScrollbar";
 
 // Common system shortcuts that may conflict with user's hotkey
 const CONFLICTING_SHORTCUTS = [
@@ -139,6 +140,9 @@ export function SettingsModal(props: SettingsModalProps) {
   const [trashError, setTrashError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const settingsContentRef = useRef<HTMLDivElement>(null);
+
+  // Auto-hide scrollbar overlay
+  useAutoHideScrollbar(settingsContentRef);
 
   const setSection = useCallback((section: typeof activeSection) => {
     setActiveSection(section);
