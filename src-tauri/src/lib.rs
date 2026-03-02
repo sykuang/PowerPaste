@@ -3661,7 +3661,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, Some(vec!["--hidden"])))
         // Note: tauri_plugin_opener removed - it was interfering with double-clicks
         .invoke_handler(tauri::generate_handler![
             get_settings,
