@@ -1,123 +1,160 @@
-# PowerPaste
+<p align="center">
+  <img src="src/assets/logo.svg" width="128" height="128" alt="PowerPaste logo" />
+</p>
 
-Cross-platform clipboard history (macOS/Windows) with optional encrypted sync via a local folder.
+<h1 align="center">PowerPaste</h1>
 
-Folder sync is designed to work with providers that sync a folder to your machine (iCloud Drive, OneDrive, Google Drive). You pick the synced folder on each device, and PowerPaste writes an encrypted `powerpaste.sync.json` file into it.
+<p align="center">
+  Open-source clipboard manager for macOS &amp; Windows — with encrypted cross-device sync, full-text search, and zero cloud accounts required.
+</p>
 
-Built with Tauri v2 (Rust backend) + React/TypeScript (UI).
+<p align="center">
+  Built with <strong>Tauri v2</strong> (Rust) + <strong>React 19</strong> (TypeScript)
+</p>
 
-## Logo & Branding
+---
 
-See [docs/LOGO.md](docs/LOGO.md) for logo usage and regenerating icons.
+## Why PowerPaste?
 
-## Prerequisites
+Most clipboard managers either lack sync, charge a subscription for it, or route your data through someone else's cloud. PowerPaste takes a different approach: **encrypted folder-based sync** that works with any provider you already use (iCloud Drive, OneDrive, Google Drive, or a plain folder). Your data never leaves your machines unencrypted.
 
-- Node.js 18+ (or newer)
-- Rust toolchain (stable) + `cargo`
-- Tauri system prerequisites: https://tauri.app/start/prerequisites/
+## Comparison
 
-## Recommended IDE Setup
+| Feature | PowerPaste | Maccy | Paste | CopyClip | Flycut |
+|---|---|---|---|---|---|
+| **Price** | Free | Free / $10 | $3.99/mo | Free / $10 | Free |
+| **Open source** | ✅ Yes | ✅ Yes | ❌ | ❌ | ✅ Yes |
+| **Text** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Images & files** | ✅ | ❌ | ✅ | ❌ | ❌ |
+| **Full-text search** | ✅ FTS5 | ✅ | ✅ | ❌ | ❌ |
+| **Cross-device sync** | ✅ Encrypted folder | ❌ | ✅ iCloud only | ❌ | ❌ |
+| **No cloud account** | ✅ | ✅ | ❌ | ✅ | ✅ |
+| **Pinboards** | ✅ Custom w/ icons | ❌ | ✅ | ❌ | ❌ |
+| **Source app tracking** | ✅ | ❌ | ✅ | ❌ | ❌ |
+| **Windows support** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Themes** | Light / Dark / System | System | Dark | System | System |
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Features
 
-## Run
+- **Clipboard history** — text, images, and files with automatic content-type detection
+- **Full-text search** — SQLite FTS5 with query caching
+- **Encrypted sync** — ChaCha20-Poly1305 + Argon2 key derivation; passphrase stored in OS keychain
+- **Folder-based sync** — works with iCloud Drive, OneDrive, Google Drive, or any synced folder
+- **Pinboards** — organize clips into custom boards with 16 built-in icons
+- **Global hotkey** — configurable shortcut (default `⌘⇧V`) with conflict detection
+- **Source app tracking** — see which app copied each item
+- **Pinned items & trash** — pin important clips; soft-delete with configurable retention
+- **Two UI modes** — floating overlay near cursor or fixed bottom strip
+- **Native macOS integration** — menu bar app, NSPanel overlay, Touch Bar support
+- **Light / Dark / System themes** — respects system accent color
+- **Launch at startup** — via `tauri-plugin-autostart`
+
+## Install
+
+Download the latest release from the [Releases](https://github.com/sykuang/PowerPaste/releases) page.
+
+| Platform | Format |
+|---|---|
+| macOS | `.dmg` |
+| Windows | `.msi` or `.exe` |
+
+### macOS Gatekeeper notice
+
+The DMG is not notarized by Apple. macOS will block it by default. To open:
+
+1. **Right-click** the app → **Open** → click **Open** in the dialog
+2. Or run: `xattr -cr /Applications/PowerPaste.app`
+
+## Development
+
+### Prerequisites
+
+- Node.js 18+
+- Rust toolchain (stable)
+- [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+
+### Quick start
 
 ```bash
-cd powerpaste
 npm install
 npm run tauri dev
 ```
 
-## Tests
-
-### Unit Tests
+### Build
 
 ```bash
-npm test          # Run once
-npm run test:watch  # Watch mode
+npm run tauri build
+```
+
+### Recommended IDE
+
+[VS Code](https://code.visualstudio.com/) with [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+
+## Tests
+
+### Unit tests
+
+```bash
+npm test            # run once
+npm run test:watch  # watch mode
 ```
 
 Runs UI unit tests (Vitest + JSDOM). These do **not** execute the native Tauri runtime.
 
-### E2E Tests
+### E2E tests
 
-PowerPaste uses a dual-layer E2E testing strategy:
+PowerPaste uses a dual-layer E2E strategy:
 
-- **Appium + WebdriverIO**: Native UI testing (window behavior, hotkeys, permissions)
-- **Playwright**: WebView content testing (React components, interactions)
+- **Appium + WebdriverIO** — native UI testing (window behavior, hotkeys, permissions)
+- **Playwright** — WebView content testing (React components, interactions)
 
-#### Prerequisites
-
-1. Build the app first:
-   ```bash
-   npm run tauri build -- --debug
-   ```
-
-2. Install Appium drivers:
-   ```bash
-   # macOS
-   npm install -g appium
-   appium driver install mac2
-   
-   # Windows
-   npm install -g appium
-   appium driver install windows
-   appium driver run windows install-wad
-   ```
-
-3. Install Playwright browsers:
-   ```bash
-   npx playwright install chromium
-   ```
-
-#### Running E2E Tests
+#### Setup
 
 ```bash
-# Run all E2E tests for current platform
-npm run test:e2e
+# Build the app
+npm run tauri build -- --debug
 
-# Appium native tests only
-npm run test:e2e:mac        # macOS
-npm run test:e2e:windows    # Windows
+# macOS Appium driver
+npm install -g appium && appium driver install mac2
 
-# Playwright WebView tests only
-npm run test:playwright
+# Windows Appium driver
+npm install -g appium && appium driver install windows && appium driver run windows install-wad
 
-# macOS permission dialog flow (requires reset permissions)
-npm run test:e2e:mac:permissions
+# Playwright
+npx playwright install chromium
 ```
 
-#### Environment Variables
+#### Run
+
+```bash
+npm run test:e2e                   # all E2E tests
+npm run test:e2e:mac               # macOS native
+npm run test:e2e:windows           # Windows native
+npm run test:playwright            # WebView tests
+npm run test:e2e:mac:permissions   # macOS permission dialog flow
+```
+
+#### Environment variables
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `POWERPASTE_TEST_WORKERS` | Override parallel worker count | Auto (2 in CI, CPU-1 locally) |
-| `POWERPASTE_TEST_TIMEOUT` | Override test timeout (ms) | Auto (90s in CI, 60s locally) |
-| `POWERPASTE_TEST_RETRIES` | Override retry count | Auto (3 in CI, 1 locally) |
-| `POWERPASTE_TEST_DB_PATH` | Isolated test database path | Auto per worker |
-| `POWERPASTE_DEVTOOLS_PORT` | Enable Playwright WebView access | Disabled |
+|---|---|---|
+| `POWERPASTE_TEST_WORKERS` | Parallel worker count | 2 in CI, CPU−1 locally |
+| `POWERPASTE_TEST_TIMEOUT` | Test timeout (ms) | 90 s in CI, 60 s locally |
+| `POWERPASTE_TEST_RETRIES` | Retry count | 3 in CI, 1 locally |
+| `POWERPASTE_TEST_DB_PATH` | Isolated test DB path | Auto per worker |
+| `POWERPASTE_DEVTOOLS_PORT` | Playwright WebView port | Disabled |
 
-#### Test Structure
+## Sync model
 
-```
-tests/e2e/
-├── appium/                    # Native UI tests
-│   ├── wdio.mac.conf.ts       # macOS config
-│   ├── wdio.windows.conf.ts   # Windows config
-│   ├── helpers/               # Shared utilities
-│   └── specs/
-│       ├── mac/               # macOS-specific tests
-│       ├── windows/           # Windows-specific tests
-│       └── shared/            # Cross-platform tests
-├── playwright/                # WebView tests
-│   ├── playwright.config.ts
-│   ├── fixtures/
-│   └── specs/
-└── fixtures/                  # Test data
-```
+1. Local clipboard history is stored in **SQLite** (WAL mode) under the app data directory.
+2. When folder sync is enabled, PowerPaste periodically exports an **encrypted** `powerpaste.sync.json` into the chosen folder.
+3. On other devices the file is imported and merged.
+4. Encryption uses **ChaCha20-Poly1305** with an **Argon2**-derived key; the passphrase lives in the OS keychain (macOS Keychain / Windows Credential Manager).
 
-## Sync model (MVP)
+## Logo & branding
 
-- Local clipboard history is stored in SQLite under the app data directory.
-- If folder sync is enabled, PowerPaste periodically imports then exports an encrypted sync file.
-- The passphrase is stored in the OS keychain (macOS Keychain / Windows Credential Manager).
+See [docs/LOGO.md](docs/LOGO.md) for logo usage and icon regeneration.
+
+## License
+
+MIT
