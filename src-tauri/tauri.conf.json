@@ -38,7 +38,7 @@
     "targets": "all",
     "macOS": {
       "infoPlist": "Info.plist",
-      "signingIdentity": "REDACTED_SIGNING_IDENTITY"
+      "signingIdentity": null
     },
     "icon": [
       "icons/128x128.png",

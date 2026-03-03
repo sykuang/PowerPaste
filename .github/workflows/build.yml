@@ -165,6 +165,12 @@ jobs:
             - **macOS**: Download the `.dmg` file, open it, and drag PowerPaste to Applications
             - **Windows**: Download the `.msi` (recommended) or `.exe` installer
 
+            ### macOS Gatekeeper Notice
+            This DMG is not notarized by Apple. macOS will block it by default. To open:
+            1. **Right-click** (or Control-click) the app and select **Open**
+            2. Click **Open** in the confirmation dialog
+            3. Alternatively, run: `xattr -cr /Applications/PowerPaste.app`
+
             ### What's Changed
             <!-- Release notes will be added here -->
 
