@@ -1,24 +1,17 @@
 # E2E Tests Workflow
 #
 # Runs Appium native UI tests on macOS and Windows.
-# Each job builds its own app to avoid artifact upload/download issues.
 #
-# Note: Playwright WebView tests are disabled because:
-# - macOS: WKWebView doesn't support Chrome DevTools Protocol (CDP)
-# - Windows: Would require WebView2 CDP configuration
+# DISABLED for automatic runs due to CI reliability issues:
+# - macOS: WebDriverAgentMac build + session creation timeouts
+# - Windows: Appium server startup race conditions
+# - Complex test infrastructure with multiple failure points
 #
-# Worker configuration:
-# - GitHub-hosted runners: auto-detects 2 workers (3 CPU cores)
-# - Self-hosted runners: set POWERPASTE_TEST_WORKERS based on resources
-# - Local development: auto-detects CPU count - 1 (up to 4)
+# Run manually via workflow_dispatch when needed.
 
 name: E2E Tests
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       workers:
