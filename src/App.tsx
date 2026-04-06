@@ -660,8 +660,10 @@ function App() {
         const res = await checkPermissions();
         if (cancelled) return;
         setPermissions(res);
-        // Open permissions window if paste is not yet enabled
-        if (!res.can_paste) {
+        // Open permissions window if paste is not yet enabled (macOS only —
+        // on other platforms paste automation isn't available so the dialog
+        // would just show an unhelpful "not implemented" message)
+        if (!res.can_paste && res.platform === "macos") {
           void openPermissionsWindow();
         }
       } catch (e) {
@@ -675,7 +677,7 @@ function App() {
           is_bundled: false,
           executable_path: "",
         });
-        void openPermissionsWindow();
+        // Don't auto-open permissions on error — we can't determine the platform
       } finally {
         if (!cancelled) setCheckingPermissions(false);
       }

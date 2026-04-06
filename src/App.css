@@ -1717,6 +1717,52 @@ html[data-theme="dark"] .settingsWarning {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
+   FIXED MODE - Compact Card Layout
+   When the overlay is a thin bottom bar, hide the title/app icon row so
+   the card content (text, image, URL) gets maximum space.
+   The Copy button is overlaid at the top-right instead.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.ui-mode-fixed .trayCardTop {
+  /* Collapse the title row into a minimal floating overlay */
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  left: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  z-index: 1;
+}
+
+.ui-mode-fixed .trayCardAppIcon,
+.ui-mode-fixed .trayCardTitle {
+  display: none;
+}
+
+.ui-mode-fixed .trayCard {
+  position: relative;
+}
+
+.ui-mode-fixed .trayCardBody {
+  /* Use full card space since title row is collapsed */
+  flex: 1;
+}
+
+.ui-mode-fixed .trayCopyBtn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ui-mode-fixed .trayCard:hover .trayCopyBtn {
+  opacity: 1;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
    FLOATING MODE (Near Cursor) - Vertical Card Layout
    Narrow popup with cards stacked vertically, appears below cursor
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -1728,8 +1774,8 @@ html[data-theme="dark"] .settingsWarning {
 
 /* Compact header in floating mode */
 .ui-mode-floating .topbar {
-  padding: 6px 8px;
-  gap: 4px;
+  padding: 4px 6px;
+  gap: 2px;
   min-height: auto;
   border-bottom: 1px solid var(--pp-border-weak);
 }
@@ -1765,6 +1811,11 @@ html[data-theme="dark"] .settingsWarning {
   flex-shrink: 0;
 }
 
+/* Hide pinboard text labels in floating mode to save space — icon only */
+.ui-mode-floating .pinboardLabel {
+  display: none;
+}
+
 .ui-mode-floating .topbarPinboard svg {
   width: 12px;
   height: 12px;
@@ -1790,7 +1841,7 @@ html[data-theme="dark"] .settingsWarning {
 .ui-mode-floating .bottomTray {
   /* Reset fixed positioning - fill remaining space in floating mode */
   position: relative;
-  height: calc(100vh - 40px); /* Account for compact header */
+  height: calc(100vh - 32px); /* Account for compact header */
   border-top: none;
   box-shadow: none;
   background: transparent;
@@ -1831,15 +1882,13 @@ html[data-theme="dark"] .settingsWarning {
 }
 
 .ui-mode-floating .trayCardTop {
-  padding: 4px 6px 4px 0;
-  margin-bottom: 4px;
-  gap: 6px;
+  padding: 2px 6px 2px 6px;
+  margin-bottom: 2px;
+  gap: 4px;
 }
 
 .ui-mode-floating .trayCardAppIcon {
-  width: 28px;
-  height: 28px;
-  margin: -4px 0 -4px 0;
+  display: none;
 }
 
 .ui-mode-floating .trayCardTitle {
@@ -1862,7 +1911,7 @@ html[data-theme="dark"] .settingsWarning {
 }
 
 .ui-mode-floating .trayCardMeta {
-  font-size: 10px;
+  display: none;
 }
 
 /* Floating mode scrollbar sizing */

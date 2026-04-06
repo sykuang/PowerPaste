@@ -230,7 +230,65 @@ pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
-    (None, None)
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
+
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() {
+                return (None, None);
+            }
+
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 {
+                return (None, None);
+            }
+
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok();
+            let handle = match handle {
+                Some(h) => h,
+                None => return (None, None),
+            };
+
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_FORMAT(0),
+                windows::core::PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
+            let _ = CloseHandle(handle);
+
+            if ok.is_err() || len == 0 {
+                return (None, None);
+            }
+
+            let exe_path = String::from_utf16_lossy(&buf[..len as usize]);
+            // Extract just the filename without extension as the "app name"
+            let name = std::path::Path::new(&exe_path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string());
+            // Use the full exe path as the "bundle id" equivalent on Windows
+            let bundle_id = Some(exe_path);
+
+            (name, bundle_id)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        (None, None)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -239,6 +297,20 @@ fn macos_get_cursor_position() -> Option<(f64, f64)> {
     
     let loc = NSEvent::mouseLocation();
     Some((loc.x, loc.y))
+}
+
+/// Get the cursor position on Windows using GetCursorPos (screen pixels).
+#[cfg(target_os = "windows")]
+fn windows_get_cursor_position() -> Option<(i32, i32)> {
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    use windows::Win32::Foundation::POINT;
+    let mut pt = POINT { x: 0, y: 0 };
+    let ok = unsafe { GetCursorPos(&mut pt) };
+    if ok.is_ok() {
+        Some((pt.x, pt.y))
+    } else {
+        None
+    }
 }
 
 /// Find the screen that contains the mouse cursor.
@@ -1286,9 +1358,57 @@ fn get_app_icon_path(app: tauri::AppHandle, bundle_id: String) -> Result<Option<
     
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
-        let _ = bundle_id;
-        Ok(None)
+        #[cfg(target_os = "windows")]
+        {
+            use std::process::Command;
+
+            // On Windows, bundle_id is the full exe path
+            let exe_path = &bundle_id;
+
+            if !std::path::Path::new(exe_path).exists() {
+                return Ok(None);
+            }
+
+            let cache_dir = crate::paths::app_data_dir(&app)
+                .map_err(|e| format!("failed to get app data dir: {e}"))?
+                .join("icon_cache");
+            std::fs::create_dir_all(&cache_dir)
+                .map_err(|e| format!("failed to create icon cache dir: {e}"))?;
+
+            let safe_name = exe_path
+                .replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+            let cached_png = cache_dir.join(format!("{}.png", safe_name));
+
+            if cached_png.exists() {
+                return Ok(Some(cached_png.to_string_lossy().to_string()));
+            }
+
+            // Use PowerShell to extract the icon from the exe and save as PNG
+            let ps_script = format!(
+                r#"Add-Type -AssemblyName System.Drawing; $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('{}'); if ($icon) {{ $bmp = $icon.ToBitmap(); $bmp.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose(); $icon.Dispose() }}"#,
+                exe_path.replace('\'', "''"),
+                cached_png.to_string_lossy().replace('\'', "''")
+            );
+
+            let result = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+                .output();
+
+            if let Ok(out) = result {
+                if out.status.success() && cached_png.exists() {
+                    return Ok(Some(cached_png.to_string_lossy().to_string()));
+                }
+            }
+
+            Ok(None)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = app;
+            let _ = bundle_id;
+            Ok(None)
+        }
     }
 }
 
@@ -1418,6 +1538,84 @@ Privacy & Security → Automation (allow controlling System Events). Details: {m
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
         }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::time::Duration;
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+                KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_V,
+            };
+
+            // Wait for focus to return to the previous app
+            std::thread::sleep(Duration::from_millis(200));
+
+            eprintln!("[powerpaste] perform_paste: sending Ctrl+V on Windows...");
+
+            let inputs = [
+                // Ctrl down
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_CONTROL,
+                            wScan: 0,
+                            dwFlags: Default::default(),
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+                // V down
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(VK_V.0),
+                            wScan: 0,
+                            dwFlags: Default::default(),
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+                // V up
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(VK_V.0),
+                            wScan: 0,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+                // Ctrl up
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_CONTROL,
+                            wScan: 0,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+            ];
+
+            let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+            if sent != inputs.len() as u32 {
+                return Err(format!(
+                    "SendInput only injected {sent}/{} events",
+                    inputs.len()
+                ));
+            }
+            eprintln!("[powerpaste] perform_paste: Ctrl+V sent successfully");
+        }
     }
 
     Ok(())
@@ -1537,10 +1735,10 @@ fn check_permissions() -> Result<PermissionsStatus, String> {
             .unwrap_or_default();
         return Ok(PermissionsStatus {
             platform: "windows".to_string(),
-            can_paste: false,
+            can_paste: true,
             automation_ok: true,
             accessibility_ok: true,
-            details: Some("Paste automation is not implemented on Windows yet.".to_string()),
+            details: None,
             is_bundled: true,
             executable_path: exe_path,
         });
@@ -1576,7 +1774,8 @@ fn open_accessibility_settings() -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Not supported on this platform".to_string())
+        // No equivalent permission settings on Windows/Linux
+        Ok(())
     }
 }
 
@@ -1593,7 +1792,7 @@ fn open_automation_settings() -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Not supported on this platform".to_string())
+        Ok(())
     }
 }
 
@@ -1661,11 +1860,10 @@ fn request_accessibility_permission() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Not supported on this platform".to_string())
+        // No accessibility permission model on Windows/Linux; always trusted
+        Ok(true)
     }
 }
-
-/// Trigger the macOS Automation permission prompt by running a test osascript
 /// targeting System Events. This causes macOS to show the "allow control" dialog.
 #[tauri::command]
 fn request_automation_permission() -> Result<bool, String> {
@@ -1689,7 +1887,8 @@ fn request_automation_permission() -> Result<bool, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Not supported on this platform".to_string())
+        // No automation permission model on Windows/Linux; always allowed
+        Ok(true)
     }
 }
 
@@ -1743,6 +1942,70 @@ fn register_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
     let hk = hotkey.trim();
     let registered = app.global_shortcut().is_registered(hk);
     eprintln!("[powerpaste] hotkey registered={registered} ({hk})");
+
+    Ok(())
+}
+
+/// Temporarily unregister the global hotkey AND disable browser accelerator keys
+/// so every key combo reaches the webview (used while the hotkey recorder is active).
+#[tauri::command]
+fn suspend_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    eprintln!("[powerpaste] suspending global hotkey for recording");
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| format!("failed to unregister hotkeys: {e}"))?;
+
+    // On Windows, disable WebView2 browser accelerator keys (Ctrl+Shift+V, Ctrl+F, etc.)
+    // so those combos fire as normal keydown events instead of being consumed by the browser.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = webview.with_webview(move |wv| {
+            unsafe {
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                use windows::core::Interface;
+                let controller = wv.controller();
+                if let Ok(core) = controller.CoreWebView2() {
+                    if let Ok(settings) = core.Settings() {
+                        if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false.into());
+                            eprintln!("[powerpaste] disabled browser accelerator keys for recording");
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let _ = webview;
+
+    Ok(())
+}
+
+/// Re-register the global hotkey and restore browser accelerator keys after recording.
+#[tauri::command]
+fn resume_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    let settings = settings_store::load_or_init_settings(&app)?;
+    eprintln!("[powerpaste] resuming global hotkey: {}", settings.hotkey);
+    register_hotkey(&app, &settings.hotkey)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = webview.with_webview(move |wv| {
+            unsafe {
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                use windows::core::Interface;
+                let controller = wv.controller();
+                if let Ok(core) = controller.CoreWebView2() {
+                    if let Ok(settings) = core.Settings() {
+                        if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(true.into());
+                            eprintln!("[powerpaste] re-enabled browser accelerator keys");
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let _ = webview;
 
     Ok(())
 }
@@ -1854,7 +2117,12 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<()
             return Ok(());
         }
 
-        position_as_bottom_overlay(&window)?;
+        let ui_mode = get_current_ui_mode();
+        match ui_mode {
+            models::UiMode::Floating => position_floating_near_cursor(&window)?,
+            models::UiMode::Fixed => position_as_bottom_overlay(&window)?,
+        }
+
         if minimized {
             let _ = window.unminimize();
         }
@@ -3064,6 +3332,123 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     Ok(())
 }
 
+/// Configure the window as a frameless floating popup on Windows:
+/// - Remove from taskbar / Alt+Tab (WS_EX_TOOLWINDOW)
+/// - Rounded corners on Windows 11+ (DWM)
+/// - Drop shadow via DWM
+#[cfg(target_os = "windows")]
+fn windows_configure_floating_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW,
+    };
+
+    // Skip taskbar via Tauri API
+    let _ = window.set_skip_taskbar(true);
+
+    // Access the raw HWND to set window styles and DWM attributes
+    if let Ok(raw) = window.hwnd() {
+        let hwnd = HWND(raw.0);
+        unsafe {
+            // Set WS_EX_TOOLWINDOW to hide from taskbar and Alt+Tab,
+            // and remove WS_EX_APPWINDOW if present
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            let new_style = (ex_style | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
+            SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
+
+            // Enable rounded corners on Windows 11+
+            // DWM_WINDOW_CORNER_PREFERENCE: DWMWCP_ROUND = 2
+            let corner_pref: u32 = 2; // DWMWCP_ROUND
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_pref as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            // Enable dark mode title bar to match app theme
+            let dark_mode: u32 = 1;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &dark_mode as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            );
+        }
+    }
+}
+
+/// Position the window near the cursor for floating mode (non-macOS).
+#[cfg(not(target_os = "macos"))]
+fn position_floating_near_cursor<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    window
+        .set_always_on_top(true)
+        .map_err(|e| format!("failed to set always-on-top: {e}"))?;
+
+    // On Windows, style the window as a frameless floating popup
+    #[cfg(target_os = "windows")]
+    windows_configure_floating_window(window);
+
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| format!("failed to get current monitor: {e}"))?
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "no monitor found".to_string())?;
+
+    let mon_size = monitor.size();
+    let mon_pos = monitor.position();
+    let scale = monitor.scale_factor();
+
+    let (width, height) = overlay_size_for_monitor(mon_size.width, mon_size.height, models::UiMode::Floating);
+
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+        .map_err(|e| format!("failed to set window size: {e}"))?;
+
+    // Try to position below the cursor
+    #[cfg(target_os = "windows")]
+    if let Some((cx, cy)) = windows_get_cursor_position() {
+        // cx, cy are in physical screen pixels
+        let mut x = cx;
+        // 10 logical pixels below cursor
+        let mut y = cy + (10.0 * scale) as i32;
+
+        let mon_right = mon_pos.x + mon_size.width as i32;
+        let mon_bottom = mon_pos.y + mon_size.height as i32;
+
+        // Keep within monitor bounds
+        if x + width as i32 > mon_right {
+            x = mon_right - width as i32;
+        }
+        if x < mon_pos.x {
+            x = mon_pos.x;
+        }
+        if y + height as i32 > mon_bottom {
+            // If no room below cursor, show above
+            y = cy - height as i32 - (10.0 * scale) as i32;
+        }
+        if y < mon_pos.y {
+            y = mon_pos.y;
+        }
+
+        window
+            .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+            .map_err(|e| format!("failed to set window position: {e}"))?;
+        return Ok(());
+    }
+
+    // Fallback: center on screen
+    let x = mon_pos.x + ((mon_size.width.saturating_sub(width)) / 2) as i32;
+    let y = mon_pos.y + ((mon_size.height.saturating_sub(height)) / 2) as i32;
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+        .map_err(|e| format!("failed to set window position: {e}"))?;
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn macos_configure_overlay_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
     use objc2::rc::Retained;
@@ -3662,6 +4047,30 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, Some(vec!["--hidden"])))
+        // Disable browser accelerator keys (Ctrl+Shift+V, Ctrl+F, etc.) on Windows
+        // so all key events pass through to JS. Applied to every webview on page load.
+        .on_page_load(|webview, _payload| {
+            #[cfg(target_os = "windows")]
+            {
+                let label = webview.label().to_string();
+                let _ = webview.with_webview(move |wv| {
+                    unsafe {
+                        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                        use windows::core::Interface;
+                        let controller = wv.controller();
+                        if let Ok(core) = controller.CoreWebView2() {
+                            if let Ok(settings) = core.Settings() {
+                                if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
+                                    let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false.into());
+                                    eprintln!("[powerpaste] disabled browser accelerator keys for '{label}'");
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            let _ = _payload;
+        })
         // Note: tauri_plugin_opener removed - it was interfering with double-clicks
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -3706,7 +4115,9 @@ pub fn run() {
             sync_now,
             set_show_dock_icon,
             set_launch_at_startup,
-            get_system_accent_color
+            get_system_accent_color,
+            suspend_hotkey,
+            resume_hotkey
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

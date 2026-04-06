@@ -117,7 +117,59 @@ fn percent_decode(input: &str) -> String {
 
 #[cfg(not(target_os = "macos"))]
 fn get_clipboard_file_urls() -> Option<Vec<String>> {
-    None
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, GetClipboardData, OpenClipboard,
+        };
+        use windows::Win32::System::Ole::CF_HDROP;
+        use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+
+        unsafe {
+            if OpenClipboard(Some(HWND::default())).is_err() {
+                return None;
+            }
+
+            let result = (|| -> Option<Vec<String>> {
+                let handle = GetClipboardData(CF_HDROP.0 as u32).ok()?;
+                let hdrop = HDROP(handle.0);
+
+                let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
+                if count == 0 {
+                    return None;
+                }
+
+                let mut paths = Vec::new();
+                for i in 0..count {
+                    let len = DragQueryFileW(hdrop, i, None);
+                    if len == 0 {
+                        continue;
+                    }
+                    let mut buf = vec![0u16; (len + 1) as usize];
+                    DragQueryFileW(hdrop, i, Some(&mut buf));
+                    // Remove trailing null
+                    if let Some(pos) = buf.iter().position(|&c| c == 0) {
+                        buf.truncate(pos);
+                    }
+                    let path = String::from_utf16_lossy(&buf);
+                    if !path.is_empty() {
+                        paths.push(path);
+                    }
+                }
+
+                if paths.is_empty() { None } else { Some(paths) }
+            })();
+
+            let _ = CloseClipboard();
+            result
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -151,7 +203,31 @@ fn get_clipboard_image_encoded() -> Option<db::EncodedImage> {
 
 #[cfg(not(target_os = "macos"))]
 fn get_clipboard_image_encoded() -> Option<db::EncodedImage> {
-    None
+    // Use arboard to get image data, then encode as PNG
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let img = clipboard.get_image().ok()?;
+    let width = img.width as u32;
+    let height = img.height as u32;
+    let rgba_bytes = img.bytes.into_owned();
+
+    if rgba_bytes.is_empty() || width == 0 || height == 0 {
+        return None;
+    }
+
+    // Encode as PNG
+    let mut png_data = Vec::new();
+    {
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut png_data);
+        use image::ImageEncoder;
+        encoder
+            .write_image(&rgba_bytes, width, height, image::ExtendedColorType::Rgba8)
+            .ok()?;
+    }
+
+    Some(db::EncodedImage {
+        bytes: png_data,
+        mime: "image/png".to_string(),
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -196,8 +272,17 @@ fn get_clipboard_change_count() -> i64 {
 
 #[cfg(not(target_os = "macos"))]
 fn get_clipboard_change_count() -> i64 {
-    // On non-macOS, return 0 - we'll fall back to hash-based detection
-    0
+    #[cfg(target_os = "windows")]
+    {
+        // GetClipboardSequenceNumber increments each time the clipboard content changes,
+        // analogous to macOS NSPasteboard.changeCount.
+        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+        unsafe { GetClipboardSequenceNumber() as i64 }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
 }
 
 #[derive(Clone)]
@@ -506,6 +591,84 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
-    Err("file clipboard is only supported on macOS".to_string())
+pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("no file paths provided".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        };
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GHND,
+        };
+        use windows::Win32::System::Ole::CF_HDROP;
+
+        // Build DROPFILES structure + double-null terminated file list (UTF-16)
+        // DROPFILES: 20 bytes header
+        let header_size = 20usize; // sizeof(DROPFILES)
+        let mut file_data: Vec<u16> = Vec::new();
+        for p in paths {
+            eprintln!("[powerpaste] set_clipboard_files: path={}", p);
+            let wide: Vec<u16> = p.encode_utf16().collect();
+            file_data.extend_from_slice(&wide);
+            file_data.push(0); // null-terminate each path
+        }
+        file_data.push(0); // double-null terminate
+
+        let data_bytes = file_data.len() * 2; // u16 = 2 bytes each
+        let total = header_size + data_bytes;
+
+        unsafe {
+            let hmem = GlobalAlloc(GHND, total)
+                .map_err(|e| format!("GlobalAlloc failed: {e}"))?;
+            let ptr = GlobalLock(hmem) as *mut u8;
+            if ptr.is_null() {
+                return Err("GlobalLock failed".to_string());
+            }
+
+            // Write DROPFILES header
+            // struct DROPFILES { DWORD pFiles; POINT pt; BOOL fNC; BOOL fWide; }
+            let pfiles = header_size as u32;
+            std::ptr::copy_nonoverlapping(&pfiles as *const u32 as *const u8, ptr, 4);
+            // pt.x=0, pt.y=0, fNC=0 (bytes 4..16 = zero, already zeroed by GHND)
+            // fWide = TRUE (1) at offset 16
+            let f_wide: u32 = 1;
+            std::ptr::copy_nonoverlapping(
+                &f_wide as *const u32 as *const u8,
+                ptr.add(16),
+                4,
+            );
+            // Copy file paths
+            std::ptr::copy_nonoverlapping(
+                file_data.as_ptr() as *const u8,
+                ptr.add(header_size),
+                data_bytes,
+            );
+
+            let _ = GlobalUnlock(hmem);
+
+            if OpenClipboard(Some(HWND::default())).is_err() {
+                return Err("OpenClipboard failed".to_string());
+            }
+            let _ = EmptyClipboard();
+
+            let handle = windows::Win32::Foundation::HANDLE(hmem.0);
+            let result = SetClipboardData(CF_HDROP.0 as u32, Some(handle));
+            let _ = CloseClipboard();
+
+            result.map_err(|e| format!("SetClipboardData failed: {e}"))?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("file clipboard is not supported on this platform".to_string())
+    }
 }

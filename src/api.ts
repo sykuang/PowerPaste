@@ -107,6 +107,16 @@ export async function setHotkey(hotkey: string): Promise<Settings> {
   return invoke("set_hotkey", { hotkey });
 }
 
+/** Temporarily unregister the global hotkey so key combos reach the webview during recording. */
+export async function suspendHotkey(): Promise<void> {
+  return invoke("suspend_hotkey");
+}
+
+/** Re-register the global hotkey after recording finishes or is cancelled. */
+export async function resumeHotkey(): Promise<void> {
+  return invoke("resume_hotkey");
+}
+
 export async function setUiMode(uiMode: UiMode): Promise<Settings> {
   return invoke("set_ui_mode", { uiMode });
 }
