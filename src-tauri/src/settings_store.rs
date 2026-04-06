@@ -6,7 +6,10 @@ use std::fs;
 
 const KEYRING_SERVICE: &str = "PowerPaste";
 const KEYRING_ACCOUNT: &str = "sync-passphrase";
+#[cfg(target_os = "macos")]
 const DEFAULT_HOTKEY: &str = "Command+Shift+V";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_HOTKEY: &str = "Ctrl+Shift+V";
 const DEFAULT_THEME: &str = "system";
 
 pub fn get<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Settings, String> {
@@ -23,6 +26,17 @@ pub fn load_or_init_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Re
         }
         if s.hotkey.trim().is_empty() {
             s.hotkey = DEFAULT_HOTKEY.to_string();
+        }
+        // Migrate macOS-only "Command" modifier to "Ctrl" on non-macOS platforms.
+        // Also normalize "Control" → "Ctrl" (older frontend recordings used "Control").
+        #[cfg(not(target_os = "macos"))]
+        {
+            if s.hotkey.contains("Command") {
+                s.hotkey = s.hotkey.replace("Command", "Ctrl");
+            }
+            if s.hotkey.contains("Control") {
+                s.hotkey = s.hotkey.replace("Control", "Ctrl");
+            }
         }
         if s.theme.trim().is_empty() {
             s.theme = DEFAULT_THEME.to_string();

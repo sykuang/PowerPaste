@@ -230,6 +230,11 @@ export function BottomTray(props: BottomTrayProps) {
     initialRect: { width: 800, height: 400 },
   });
 
+  // Force virtualizer to re-measure when switching between floating/fixed mode
+  useEffect(() => {
+    virtualizer.measure();
+  }, [isFloating]);
+
   // Reset scroll position to beginning when scrollResetKey changes
   // (e.g. panel shown, new items arrive, pinboard change)
   useEffect(() => {

@@ -7,6 +7,8 @@ import {
   Settings,
   setShowDockIcon,
   setHotkey,
+  suspendHotkey,
+  resumeHotkey,
   setTheme as setThemeApi,
   setUiMode as setUiModeApi,
   setHistoryRetention,
@@ -48,13 +50,20 @@ const KEY_SYMBOLS: Record<string, string> = {
   Meta: "⌘",
 };
 
-// Convert KeyboardEvent to Tauri hotkey format
-function keyEventToHotkey(e: KeyboardEvent): string | null {
+// Convert KeyboardEvent to Tauri hotkey format.
+// On Windows, WebView2 may strip modifier flags from keydown events when
+// processing browser accelerator shortcuts (e.g. Ctrl+Shift+V = paste without
+// formatting). The optional `trackedModifiers` parameter provides independently
+// tracked modifier state to compensate.
+function keyEventToHotkey(
+  e: KeyboardEvent,
+  trackedModifiers?: { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean }
+): string | null {
   const modifiers: string[] = [];
-  if (e.metaKey) modifiers.push("Command");
-  if (e.ctrlKey) modifiers.push("Control");
-  if (e.altKey) modifiers.push("Alt");
-  if (e.shiftKey) modifiers.push("Shift");
+  if (e.metaKey || trackedModifiers?.meta) modifiers.push("Command");
+  if (e.ctrlKey || trackedModifiers?.ctrl) modifiers.push("Ctrl");
+  if (e.altKey || trackedModifiers?.alt) modifiers.push("Alt");
+  if (e.shiftKey || trackedModifiers?.shift) modifiers.push("Shift");
 
   // Ignore if only modifiers pressed
   const key = e.key;
@@ -156,6 +165,39 @@ export function SettingsModal(props: SettingsModalProps) {
   const [pendingHotkey, setPendingHotkey] = useState<string | null>(null);
   const hotkeyInputRef = useRef<HTMLButtonElement>(null);
 
+  // Track modifier key state independently via capture-phase listeners.
+  // On Windows, WebView2 may consume browser accelerator shortcuts (e.g.
+  // Ctrl+Shift+V) and strip modifier flags from the DOM keydown event.
+  // By tracking modifier presses ourselves, we can reconstruct the full combo.
+  const modifierStateRef = useRef({ ctrl: false, shift: false, alt: false, meta: false });
+
+  useEffect(() => {
+    const trackDown = (e: KeyboardEvent) => {
+      if (e.key === "Control") modifierStateRef.current.ctrl = true;
+      if (e.key === "Shift") modifierStateRef.current.shift = true;
+      if (e.key === "Alt") modifierStateRef.current.alt = true;
+      if (e.key === "Meta") modifierStateRef.current.meta = true;
+    };
+    const trackUp = (e: KeyboardEvent) => {
+      if (e.key === "Control") modifierStateRef.current.ctrl = false;
+      if (e.key === "Shift") modifierStateRef.current.shift = false;
+      if (e.key === "Alt") modifierStateRef.current.alt = false;
+      if (e.key === "Meta") modifierStateRef.current.meta = false;
+    };
+    const resetAll = () => {
+      modifierStateRef.current = { ctrl: false, shift: false, alt: false, meta: false };
+    };
+    // Capture phase ensures we see events before browser accelerator handling
+    window.addEventListener("keydown", trackDown, true);
+    window.addEventListener("keyup", trackUp, true);
+    window.addEventListener("blur", resetAll);
+    return () => {
+      window.removeEventListener("keydown", trackDown, true);
+      window.removeEventListener("keyup", trackUp, true);
+      window.removeEventListener("blur", resetAll);
+    };
+  }, []);
+
   // Confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string;
@@ -219,10 +261,11 @@ export function SettingsModal(props: SettingsModalProps) {
       if (e.key === "Escape") {
         setIsRecordingHotkey(false);
         setPendingHotkey(null);
+        resumeHotkey().catch(() => {});
         return;
       }
 
-      const newHotkey = keyEventToHotkey(e);
+      const newHotkey = keyEventToHotkey(e, modifierStateRef.current);
       if (newHotkey) {
         setPendingHotkey(newHotkey);
         setIsRecordingHotkey(false);
@@ -234,17 +277,22 @@ export function SettingsModal(props: SettingsModalProps) {
           setHotkeyWarning(null);
         }
 
-        // Auto-save
+        // Auto-save: set_hotkey re-registers the shortcut; resume_hotkey restores
+        // browser accelerator key state (WebView2 on Windows).
         void (async () => {
           try {
             await setHotkey(newHotkey);
             setHotkeyValue(newHotkey);
             setHotkeyError(null);
             setPendingHotkey(null);
+            // Restore browser accelerator keys after successful save
+            resumeHotkey().catch(() => {});
           } catch (err) {
+            console.error("[hotkey-recorder] failed to save hotkey:", err);
             setHotkeyError(String(err));
-            // Revert to previous hotkey
             setPendingHotkey(null);
+            // Re-register old hotkey on failure
+            resumeHotkey().catch(() => {});
           }
         })();
       }
@@ -254,8 +302,10 @@ export function SettingsModal(props: SettingsModalProps) {
 
   useEffect(() => {
     if (isRecordingHotkey) {
-      window.addEventListener("keydown", handleHotkeyKeyDown);
-      return () => window.removeEventListener("keydown", handleHotkeyKeyDown);
+      // Use capture phase so we see keydown events BEFORE WebView2's browser
+      // accelerator handling strips modifier flags (e.g. ctrlKey on Ctrl+Shift+V).
+      window.addEventListener("keydown", handleHotkeyKeyDown, true);
+      return () => window.removeEventListener("keydown", handleHotkeyKeyDown, true);
     }
   }, [isRecordingHotkey, handleHotkeyKeyDown]);
 
@@ -541,14 +591,24 @@ export function SettingsModal(props: SettingsModalProps) {
               <button
                 ref={hotkeyInputRef}
                 className={`hotkeyRecorder ${isRecordingHotkey ? "recording" : ""}`}
-                onClick={() => {
+                onClick={async () => {
+                  // Set recording state synchronously so onBlur can always
+                  // resume the hotkey (avoids race if blur fires during await)
                   setIsRecordingHotkey(true);
                   setHotkeyError(null);
+                  try {
+                    await suspendHotkey();
+                  } catch (err) {
+                    console.error("[hotkey-recorder] failed to suspend hotkey:", err);
+                    setIsRecordingHotkey(false);
+                    setHotkeyError("Failed to suspend the current hotkey. Please try again.");
+                  }
                 }}
                 onBlur={() => {
                   if (isRecordingHotkey) {
                     setIsRecordingHotkey(false);
                     setPendingHotkey(null);
+                    resumeHotkey().catch(() => {});
                   }
                 }}
               >
