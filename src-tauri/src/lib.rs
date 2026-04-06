@@ -2610,12 +2610,11 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
 
     let ui_mode = get_current_ui_mode();
     let (width, height) = overlay_size_for_monitor(size.width, size.height, ui_mode);
-    let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
 
-    // On Windows, position above the taskbar using the work area.
-    // On macOS, use full screen height (NSPanel floats above the Dock).
+    // On Windows, use the work area (excludes taskbar on any edge) for positioning.
+    // On macOS, use full screen bounds (NSPanel floats above the Dock).
     #[cfg(target_os = "windows")]
-    let y = {
+    let (x, y) = {
         use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
         use windows::Win32::Foundation::RECT;
         let mut work_area = RECT::default();
@@ -2628,14 +2627,22 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             )
         };
         if got_work_area.is_ok() {
-            // Place at the bottom of the work area (above the taskbar)
-            work_area.bottom - height as i32
+            let wa_width = (work_area.right - work_area.left) as u32;
+            let x = work_area.left + ((wa_width.saturating_sub(width)) / 2) as i32;
+            let y = work_area.bottom - height as i32;
+            (x, y)
         } else {
-            pos.y + (size.height.saturating_sub(height)) as i32
+            let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
+            let y = pos.y + (size.height.saturating_sub(height)) as i32;
+            (x, y)
         }
     };
     #[cfg(not(target_os = "windows"))]
-    let y = pos.y + (size.height.saturating_sub(height)) as i32;
+    let (x, y) = {
+        let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
+        let y = pos.y + (size.height.saturating_sub(height)) as i32;
+        (x, y)
+    };
 
     window
         .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
