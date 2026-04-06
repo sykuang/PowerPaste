@@ -2633,6 +2633,10 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
             let (width, height) = overlay_size_for_monitor(wa_width, wa_height, ui_mode);
             let x = work_area.left + ((wa_width.saturating_sub(width)) / 2) as i32;
             let y = work_area.bottom - height as i32;
+            eprintln!("[powerpaste] position_as_bottom_overlay: work_area=({},{},{},{}), wa_size={}x{}, overlay={}x{}, pos=({},{}), monitor_size={}x{}, monitor_pos=({},{}), scale={}",
+                work_area.left, work_area.top, work_area.right, work_area.bottom,
+                wa_width, wa_height, width, height, x, y,
+                size.width, size.height, pos.x, pos.y, monitor.scale_factor());
             (x, y, width, height)
         } else {
             let (width, height) = overlay_size_for_monitor(size.width, size.height, ui_mode);
@@ -2648,12 +2652,25 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         (x, y)
     };
 
-    window
-        .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
-        .map_err(|e| format!("failed to set window size: {e}"))?;
-    window
-        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
-        .map_err(|e| format!("failed to set window position: {e}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        // Work area values are in logical (scaled) pixels on Windows
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize { width: width as f64, height: height as f64 }))
+            .map_err(|e| format!("failed to set window size: {e}"))?;
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition { x: x as f64, y: y as f64 }))
+            .map_err(|e| format!("failed to set window position: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        window
+            .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+            .map_err(|e| format!("failed to set window size: {e}"))?;
+        window
+            .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+            .map_err(|e| format!("failed to set window position: {e}"))?;
+    }
     Ok(())
 }
 
