@@ -2611,6 +2611,30 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     let ui_mode = get_current_ui_mode();
     let (width, height) = overlay_size_for_monitor(size.width, size.height, ui_mode);
     let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
+
+    // On Windows, position above the taskbar using the work area.
+    // On macOS, use full screen height (NSPanel floats above the Dock).
+    #[cfg(target_os = "windows")]
+    let y = {
+        use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
+        use windows::Win32::Foundation::RECT;
+        let mut work_area = RECT::default();
+        let got_work_area = unsafe {
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some(&mut work_area as *mut RECT as *mut _),
+                Default::default(),
+            )
+        };
+        if got_work_area.is_ok() {
+            // Place at the bottom of the work area (above the taskbar)
+            work_area.bottom - height as i32
+        } else {
+            pos.y + (size.height.saturating_sub(height)) as i32
+        }
+    };
+    #[cfg(not(target_os = "windows"))]
     let y = pos.y + (size.height.saturating_sub(height)) as i32;
 
     window
