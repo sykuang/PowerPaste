@@ -254,34 +254,19 @@ export function SettingsModal(props: SettingsModalProps) {
     (e: KeyboardEvent) => {
       if (!isRecordingHotkey) return;
 
-      console.log("[hotkey-recorder] keydown:", {
-        key: e.key,
-        code: e.code,
-        ctrlKey: e.ctrlKey,
-        shiftKey: e.shiftKey,
-        altKey: e.altKey,
-        metaKey: e.metaKey,
-        trackedModifiers: { ...modifierStateRef.current },
-      });
-
       e.preventDefault();
       e.stopPropagation();
 
       // Escape cancels recording
       if (e.key === "Escape") {
-        console.log("[hotkey-recorder] recording cancelled (Escape), resuming hotkey");
         setIsRecordingHotkey(false);
         setPendingHotkey(null);
-        resumeHotkey().catch((err) => {
-          console.error("[hotkey-recorder] failed to resume hotkey:", err);
-        });
+        resumeHotkey().catch(() => {});
         return;
       }
 
       const newHotkey = keyEventToHotkey(e, modifierStateRef.current);
-      console.log("[hotkey-recorder] parsed hotkey:", newHotkey);
       if (newHotkey) {
-        console.log("[hotkey-recorder] recording complete:", newHotkey);
         setPendingHotkey(newHotkey);
         setIsRecordingHotkey(false);
 
@@ -297,7 +282,6 @@ export function SettingsModal(props: SettingsModalProps) {
         void (async () => {
           try {
             await setHotkey(newHotkey);
-            console.log("[hotkey-recorder] hotkey saved successfully:", newHotkey);
             setHotkeyValue(newHotkey);
             setHotkeyError(null);
             setPendingHotkey(null);
@@ -608,25 +592,23 @@ export function SettingsModal(props: SettingsModalProps) {
                 ref={hotkeyInputRef}
                 className={`hotkeyRecorder ${isRecordingHotkey ? "recording" : ""}`}
                 onClick={async () => {
-                  console.log("[hotkey-recorder] recording started, suspending hotkey");
+                  // Set recording state synchronously so onBlur can always
+                  // resume the hotkey (avoids race if blur fires during await)
+                  setIsRecordingHotkey(true);
+                  setHotkeyError(null);
                   try {
                     await suspendHotkey();
-                    console.log("[hotkey-recorder] hotkey suspended successfully");
-                    setHotkeyError(null);
-                    setIsRecordingHotkey(true);
                   } catch (err) {
                     console.error("[hotkey-recorder] failed to suspend hotkey:", err);
+                    setIsRecordingHotkey(false);
                     setHotkeyError("Failed to suspend the current hotkey. Please try again.");
                   }
                 }}
                 onBlur={() => {
                   if (isRecordingHotkey) {
-                    console.log("[hotkey-recorder] recording cancelled (blur), resuming hotkey");
                     setIsRecordingHotkey(false);
                     setPendingHotkey(null);
-                    resumeHotkey().catch((err) => {
-                      console.error("[hotkey-recorder] failed to resume hotkey:", err);
-                    });
+                    resumeHotkey().catch(() => {});
                   }
                 }}
               >
