@@ -60,7 +60,7 @@ function getYouTubeVideoId(url: string): string | null {
   try {
     const u = new URL(url);
     // Handle youtube.com/watch?v=VIDEO_ID
-    if (u.hostname.includes("youtube.com")) {
+    if (u.hostname === "youtube.com" || u.hostname.endsWith(".youtube.com")) {
       return u.searchParams.get("v");
     }
     // Handle youtu.be/VIDEO_ID
@@ -76,7 +76,7 @@ function getYouTubeVideoId(url: string): string | null {
 function getVimeoVideoId(url: string): string | null {
   try {
     const u = new URL(url);
-    if (u.hostname.includes("vimeo.com")) {
+    if (u.hostname === "vimeo.com" || u.hostname.endsWith(".vimeo.com")) {
       // Handle vimeo.com/VIDEO_ID or vimeo.com/channels/.../VIDEO_ID
       const pathParts = u.pathname.split("/").filter(Boolean);
       // Last numeric segment is usually the video ID
@@ -95,7 +95,7 @@ function getVimeoVideoId(url: string): string | null {
 function getDailymotionVideoId(url: string): string | null {
   try {
     const u = new URL(url);
-    if (u.hostname.includes("dailymotion.com") || u.hostname === "dai.ly") {
+    if (u.hostname === "dailymotion.com" || u.hostname.endsWith(".dailymotion.com") || u.hostname === "dai.ly") {
       // Handle dailymotion.com/video/VIDEO_ID or dai.ly/VIDEO_ID
       const match = u.pathname.match(/\/video\/([a-zA-Z0-9]+)/) ||
                     u.pathname.match(/^\/([a-zA-Z0-9]+)/);
@@ -110,7 +110,7 @@ function getDailymotionVideoId(url: string): string | null {
 function getGitHubRepoInfo(url: string): GitHubRepoInfo | null {
   try {
     const u = new URL(url);
-    if (!u.hostname.includes("github.com")) return null;
+    if (!(u.hostname === "github.com" || u.hostname.endsWith(".github.com"))) return null;
 
     const pathParts = u.pathname.split("/").filter(Boolean);
     if (pathParts.length >= 2) {
@@ -125,7 +125,7 @@ function getGitHubRepoInfo(url: string): GitHubRepoInfo | null {
 function getImgurInfo(url: string): ImgurInfo | null {
   try {
     const u = new URL(url);
-    if (!u.hostname.includes("imgur.com")) return null;
+    if (!(u.hostname === "imgur.com" || u.hostname.endsWith(".imgur.com"))) return null;
 
     // Handle i.imgur.com/IMAGE_ID.ext
     if (u.hostname === "i.imgur.com") {
@@ -154,7 +154,7 @@ function getImgurInfo(url: string): ImgurInfo | null {
 function getGiphyId(url: string): string | null {
   try {
     const u = new URL(url);
-    if (!u.hostname.includes("giphy.com")) return null;
+    if (!(u.hostname === "giphy.com" || u.hostname.endsWith(".giphy.com"))) return null;
 
     // Handle giphy.com/gifs/NAME-ID or media.giphy.com/media/ID/giphy.gif
     const match = u.pathname.match(/\/gifs\/.*-([a-zA-Z0-9]+)$/) ||

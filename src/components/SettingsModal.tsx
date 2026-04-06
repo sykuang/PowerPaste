@@ -33,17 +33,18 @@ const CONFLICTING_SHORTCUTS = [
   "Command+W",
   "Command+Tab",
   "Command+Space",
-  "Control+C",
-  "Control+V",
-  "Control+X",
-  "Control+Z",
-  "Control+A",
-  "Control+S",
+  "Ctrl+C",
+  "Ctrl+V",
+  "Ctrl+X",
+  "Ctrl+Z",
+  "Ctrl+A",
+  "Ctrl+S",
 ];
 
 // Map key codes to display symbols
 const KEY_SYMBOLS: Record<string, string> = {
   Command: "⌘",
+  Ctrl: "⌃",
   Control: "⌃",
   Alt: "⌥",
   Shift: "⇧",
@@ -170,6 +171,9 @@ export function SettingsModal(props: SettingsModalProps) {
   // Ctrl+Shift+V) and strip modifier flags from the DOM keydown event.
   // By tracking modifier presses ourselves, we can reconstruct the full combo.
   const modifierStateRef = useRef({ ctrl: false, shift: false, alt: false, meta: false });
+  // Track whether hotkey is suspended via a ref so onBlur can check it
+  // immediately without waiting for React's batched state updates.
+  const hotkeySuspendedRef = useRef(false);
 
   useEffect(() => {
     const trackDown = (e: KeyboardEvent) => {
@@ -592,12 +596,12 @@ export function SettingsModal(props: SettingsModalProps) {
                 ref={hotkeyInputRef}
                 className={`hotkeyRecorder ${isRecordingHotkey ? "recording" : ""}`}
                 onClick={async () => {
-                  // Set recording state synchronously so onBlur can always
-                  // resume the hotkey (avoids race if blur fires during await)
                   setIsRecordingHotkey(true);
                   setHotkeyError(null);
+                  hotkeySuspendedRef.current = false;
                   try {
                     await suspendHotkey();
+                    hotkeySuspendedRef.current = true;
                   } catch (err) {
                     console.error("[hotkey-recorder] failed to suspend hotkey:", err);
                     setIsRecordingHotkey(false);
@@ -605,9 +609,10 @@ export function SettingsModal(props: SettingsModalProps) {
                   }
                 }}
                 onBlur={() => {
-                  if (isRecordingHotkey) {
-                    setIsRecordingHotkey(false);
-                    setPendingHotkey(null);
+                  setIsRecordingHotkey(false);
+                  setPendingHotkey(null);
+                  if (hotkeySuspendedRef.current) {
+                    hotkeySuspendedRef.current = false;
                     resumeHotkey().catch(() => {});
                   }
                 }}
