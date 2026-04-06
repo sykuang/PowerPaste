@@ -2652,25 +2652,12 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         (x, y)
     };
 
-    #[cfg(target_os = "windows")]
-    {
-        // Work area values are in logical (scaled) pixels on Windows
-        window
-            .set_size(tauri::Size::Logical(tauri::LogicalSize { width: width as f64, height: height as f64 }))
-            .map_err(|e| format!("failed to set window size: {e}"))?;
-        window
-            .set_position(tauri::Position::Logical(tauri::LogicalPosition { x: x as f64, y: y as f64 }))
-            .map_err(|e| format!("failed to set window position: {e}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        window
-            .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
-            .map_err(|e| format!("failed to set window size: {e}"))?;
-        window
-            .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
-            .map_err(|e| format!("failed to set window position: {e}"))?;
-    }
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+        .map_err(|e| format!("failed to set window size: {e}"))?;
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+        .map_err(|e| format!("failed to set window position: {e}"))?;
     Ok(())
 }
 
