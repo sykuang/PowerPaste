@@ -41,13 +41,22 @@ Most clipboard managers either lack sync, charge a subscription for it, or route
 - **Encrypted sync** — ChaCha20-Poly1305 + Argon2 key derivation; passphrase stored in OS keychain
 - **Folder-based sync** — works with iCloud Drive, OneDrive, Google Drive, or any synced folder
 - **Pinboards** — organize clips into custom boards with 16 built-in icons
-- **Global hotkey** — configurable shortcut (default `⌘⇧V`) with conflict detection
+- **Global hotkey** — configurable shortcut (`⌘⇧V` on macOS, `Ctrl+Shift+V` on Windows) with conflict detection
 - **Source app tracking** — see which app copied each item
 - **Pinned items & trash** — pin important clips; soft-delete with configurable retention
 - **Two UI modes** — floating overlay near cursor or fixed bottom strip
 - **Native macOS integration** — menu bar app, NSPanel overlay, Touch Bar support
+- **Native Windows integration** — frameless floating window, DWM rounded corners, taskbar-hidden popup
 - **Light / Dark / System themes** — respects system accent color
 - **Launch at startup** — via `tauri-plugin-autostart`
+
+## Platform support
+
+| Platform | Status |
+|---|---|
+| macOS (Apple Silicon & Intel) | ✅ Fully supported |
+| Windows (x64 & ARM64) | ✅ Fully supported |
+| Linux | ❌ Not supported |
 
 ## Install
 
@@ -89,6 +98,19 @@ npm run tauri build
 ### Recommended IDE
 
 [VS Code](https://code.visualstudio.com/) with [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+
+### Architecture — platform abstraction
+
+All OS-specific code lives in `src-tauri/src/platform/`:
+
+```
+platform/
+  mod.rs        # Re-exports from the active platform via #[cfg]
+  macos.rs      # macOS: NSPanel, osascript, NSPasteboard
+  windows.rs    # Windows: Win32 SendInput, CF_HDROP, DWM, GetForegroundWindow
+```
+
+Each file exports the same function signatures (e.g. `perform_paste`, `query_frontmost_app_info`, `check_permissions`). The rest of the codebase calls `platform::*` without any `#[cfg]` blocks.
 
 ## Tests
 
