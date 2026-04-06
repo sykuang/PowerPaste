@@ -1758,8 +1758,15 @@ html[data-theme="dark"] .settingsWarning {
   transition: opacity 0.15s ease;
 }
 
-.ui-mode-fixed .trayCard:hover .trayCopyBtn {
+.ui-mode-fixed .trayCard:hover .trayCopyBtn,
+.ui-mode-fixed .trayCard:focus-within .trayCopyBtn,
+.ui-mode-fixed .trayCopyBtn:focus-visible {
   opacity: 1;
+}
+
+.ui-mode-fixed .trayCopyBtn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -1811,9 +1818,18 @@ html[data-theme="dark"] .settingsWarning {
   flex-shrink: 0;
 }
 
-/* Hide pinboard text labels in floating mode to save space — icon only */
+/* Visually hide pinboard text labels in floating mode while preserving accessibility */
 .ui-mode-floating .pinboardLabel {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .ui-mode-floating .topbarPinboard svg {

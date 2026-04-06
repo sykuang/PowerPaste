@@ -3336,30 +3336,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::AppleScript, Some(vec!["--hidden"])))
-        // Disable browser accelerator keys (Ctrl+Shift+V, Ctrl+F, etc.) on Windows
-        // so all key events pass through to JS. Applied to every webview on page load.
-        .on_page_load(|webview, _payload| {
-            #[cfg(target_os = "windows")]
-            {
-                let label = webview.label().to_string();
-                let _ = webview.with_webview(move |wv| {
-                    unsafe {
-                        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
-                        use windows::core::Interface;
-                        let controller = wv.controller();
-                        if let Ok(core) = controller.CoreWebView2() {
-                            if let Ok(settings) = core.Settings() {
-                                if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
-                                    let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false.into());
-                                    eprintln!("[powerpaste] disabled browser accelerator keys for '{label}'");
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-            let _ = _payload;
-        })
+        // Browser accelerator keys are managed by suspend_hotkey/resume_hotkey
+        // during hotkey recording only. No global override on page load.
+        .on_page_load(|_webview, _payload| {})
         // Note: tauri_plugin_opener removed - it was interfering with double-clicks
         .invoke_handler(tauri::generate_handler![
             get_settings,

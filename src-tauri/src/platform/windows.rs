@@ -438,8 +438,7 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     use windows::Win32::System::Ole::CF_HDROP;
 
     // Build DROPFILES structure + double-null terminated file list (UTF-16)
-    // DROPFILES: 20 bytes header
-    let header_size = 20usize; // sizeof(DROPFILES)
+    let header_size = std::mem::size_of::<windows::Win32::UI::Shell::DROPFILES>();
     let mut file_data: Vec<u16> = Vec::new();
     for p in paths {
         eprintln!("[powerpaste] set_clipboard_files: path={}", p);
@@ -453,15 +452,26 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     let total = header_size + data_bytes;
 
     unsafe {
-        let hmem = GlobalAlloc(GHND, total)
-            .map_err(|e| format!("GlobalAlloc failed: {e}"))?;
+        // Open clipboard first so we don't leak memory if it fails
+        if OpenClipboard(Some(HWND::default())).is_err() {
+            return Err("OpenClipboard failed".to_string());
+        }
+        let _ = EmptyClipboard();
+
+        let hmem = match GlobalAlloc(GHND, total) {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = CloseClipboard();
+                return Err(format!("GlobalAlloc failed: {e}"));
+            }
+        };
         let ptr = GlobalLock(hmem) as *mut u8;
         if ptr.is_null() {
+            let _ = CloseClipboard();
             return Err("GlobalLock failed".to_string());
         }
 
         // Write DROPFILES header
-        // struct DROPFILES { DWORD pFiles; POINT pt; BOOL fNC; BOOL fWide; }
         let pfiles = header_size as u32;
         std::ptr::copy_nonoverlapping(&pfiles as *const u32 as *const u8, ptr, 4);
         // pt.x=0, pt.y=0, fNC=0 (bytes 4..16 = zero, already zeroed by GHND)
@@ -481,12 +491,8 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
 
         let _ = GlobalUnlock(hmem);
 
-        if OpenClipboard(Some(HWND::default())).is_err() {
-            return Err("OpenClipboard failed".to_string());
-        }
-        let _ = EmptyClipboard();
-
         let handle = windows::Win32::Foundation::HANDLE(hmem.0);
+        // On success, SetClipboardData takes ownership of hmem
         let result = SetClipboardData(CF_HDROP.0 as u32, Some(handle));
         let _ = CloseClipboard();
 

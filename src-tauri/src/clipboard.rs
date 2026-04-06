@@ -86,7 +86,7 @@ impl ClipboardWatcher {
                     break;
                 }
 
-                // Check if clipboard has changed using macOS change count
+                // Check if clipboard has changed using platform change count
                 let current_change_count = crate::platform::get_clipboard_change_count();
                 if current_change_count != 0 {
                     if current_change_count == last_change_count {
