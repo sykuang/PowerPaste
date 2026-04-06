@@ -2614,7 +2614,7 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     // On Windows, use the work area (excludes taskbar on any edge) for positioning.
     // On macOS, use full screen bounds (NSPanel floats above the Dock).
     #[cfg(target_os = "windows")]
-    let (x, y) = {
+    let (x, y, width, height) = {
         use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
         use windows::Win32::Foundation::RECT;
         let mut work_area = RECT::default();
@@ -2628,13 +2628,17 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         };
         if got_work_area.is_ok() {
             let wa_width = (work_area.right - work_area.left) as u32;
+            let wa_height = (work_area.bottom - work_area.top) as u32;
+            // Compute overlay size from the work area so it fits within usable space
+            let (width, height) = overlay_size_for_monitor(wa_width, wa_height, ui_mode);
             let x = work_area.left + ((wa_width.saturating_sub(width)) / 2) as i32;
             let y = work_area.bottom - height as i32;
-            (x, y)
+            (x, y, width, height)
         } else {
+            let (width, height) = overlay_size_for_monitor(size.width, size.height, ui_mode);
             let x = pos.x + ((size.width.saturating_sub(width)) / 2) as i32;
             let y = pos.y + (size.height.saturating_sub(height)) as i32;
-            (x, y)
+            (x, y, width, height)
         }
     };
     #[cfg(not(target_os = "windows"))]
