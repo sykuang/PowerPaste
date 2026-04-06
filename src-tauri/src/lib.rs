@@ -2,6 +2,7 @@ mod clipboard;
 mod db;
 mod models;
 mod paths;
+pub(crate) mod platform;
 mod settings_store;
 mod sync;
 
@@ -120,7 +121,7 @@ fn overlay_size_for_monitor(monitor_width: u32, monitor_height: u32, ui_mode: mo
 }
 
 #[cfg(target_os = "macos")]
-static OVERLAY_PANEL_PTR: OnceLock<usize> = OnceLock::new();
+pub(crate) static OVERLAY_PANEL_PTR: OnceLock<usize> = OnceLock::new();
 
 /// Stores the local keyboard event monitor object pointer (leaked).
 /// We need to keep it alive while the panel is visible.
@@ -161,157 +162,8 @@ static PANEL_SHOW_GENERATION: std::sync::atomic::AtomicU64 =
 static CLICK_MONITOR_INSTALL_TIME_MS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-#[cfg(target_os = "macos")]
-static LAST_FRONTMOST_APP_NAME: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-
-#[cfg(target_os = "macos")]
-fn macos_set_last_frontmost_app_name(name: String) {
-    let cell = LAST_FRONTMOST_APP_NAME.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(name);
-}
-
-#[cfg(target_os = "macos")]
-#[allow(dead_code)]
-fn macos_get_last_frontmost_app_name() -> Option<String> {
-    let cell = LAST_FRONTMOST_APP_NAME.get_or_init(|| Mutex::new(None));
-    let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-    guard.clone()
-}
-
-#[cfg(target_os = "macos")]
-fn macos_query_frontmost_app_name() -> Option<String> {
-    use std::process::Command;
-    let output = Command::new("osascript")
-        .args([
-            "-e",
-            "tell application \"System Events\" to get name of first application process whose frontmost is true",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
-}
-
-/// Query the bundle identifier of the frontmost application.
-#[cfg(target_os = "macos")]
-pub fn macos_query_frontmost_app_bundle_id() -> Option<String> {
-    use std::process::Command;
-    let output = Command::new("osascript")
-        .args([
-            "-e",
-            "tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let bundle_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if bundle_id.is_empty() {
-        None
-    } else {
-        Some(bundle_id)
-    }
-}
-
-/// Query both name and bundle ID of the frontmost application.
-#[cfg(target_os = "macos")]
-pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
-    (macos_query_frontmost_app_name(), macos_query_frontmost_app_bundle_id())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn macos_query_frontmost_app_info() -> (Option<String>, Option<String>) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{
-            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-            PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId,
-        };
-
-        unsafe {
-            let hwnd = GetForegroundWindow();
-            if hwnd.0.is_null() {
-                return (None, None);
-            }
-
-            let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            if pid == 0 {
-                return (None, None);
-            }
-
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok();
-            let handle = match handle {
-                Some(h) => h,
-                None => return (None, None),
-            };
-
-            let mut buf = [0u16; 1024];
-            let mut len = buf.len() as u32;
-            let ok = QueryFullProcessImageNameW(
-                handle,
-                PROCESS_NAME_FORMAT(0),
-                windows::core::PWSTR(buf.as_mut_ptr()),
-                &mut len,
-            );
-            let _ = CloseHandle(handle);
-
-            if ok.is_err() || len == 0 {
-                return (None, None);
-            }
-
-            let exe_path = String::from_utf16_lossy(&buf[..len as usize]);
-            // Extract just the filename without extension as the "app name"
-            let name = std::path::Path::new(&exe_path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string());
-            // Use the full exe path as the "bundle id" equivalent on Windows
-            let bundle_id = Some(exe_path);
-
-            (name, bundle_id)
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        (None, None)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_get_cursor_position() -> Option<(f64, f64)> {
-    use objc2_app_kit::NSEvent;
-    
-    let loc = NSEvent::mouseLocation();
-    Some((loc.x, loc.y))
-}
-
-/// Get the cursor position on Windows using GetCursorPos (screen pixels).
-#[cfg(target_os = "windows")]
-fn windows_get_cursor_position() -> Option<(i32, i32)> {
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    use windows::Win32::Foundation::POINT;
-    let mut pt = POINT { x: 0, y: 0 };
-    let ok = unsafe { GetCursorPos(&mut pt) };
-    if ok.is_ok() {
-        Some((pt.x, pt.y))
-    } else {
-        None
-    }
-}
+/// Get the cursor position (delegates to platform module).
+/// `macos_screen_containing_cursor` below still needs the macOS-specific return.
 
 /// Find the screen that contains the mouse cursor.
 #[cfg(target_os = "macos")]
@@ -319,7 +171,7 @@ fn windows_get_cursor_position() -> Option<(i32, i32)> {
 fn macos_screen_containing_cursor(mtm: objc2::MainThreadMarker) -> Option<objc2::rc::Retained<objc2_app_kit::NSScreen>> {
     use objc2_app_kit::NSScreen;
     
-    let (cursor_x, cursor_y) = macos_get_cursor_position()?;
+    let (cursor_x, cursor_y) = platform::get_cursor_position()?;
     
     let screens = NSScreen::screens(mtm);
     let count = screens.len();
@@ -432,7 +284,7 @@ fn macos_install_keyboard_monitor_real<R: tauri::Runtime>(app_handle: tauri::App
 
 /// Remove the local keyboard event monitor when panel is hidden.
 #[cfg(target_os = "macos")]
-fn macos_remove_keyboard_monitor() {
+pub(crate) fn macos_remove_keyboard_monitor() {
     use objc2_app_kit::NSEvent;
 
     let cell = KEYBOARD_MONITOR_PTR.get_or_init(|| Mutex::new(None));
@@ -549,7 +401,7 @@ fn macos_install_mouse_focus_monitor() {
 
 /// Remove the local mouse focus monitor when panel is hidden.
 #[cfg(target_os = "macos")]
-fn macos_remove_mouse_focus_monitor() {
+pub(crate) fn macos_remove_mouse_focus_monitor() {
     use objc2_app_kit::NSEvent;
 
     let cell = MOUSE_FOCUS_MONITOR_PTR.get_or_init(|| Mutex::new(None));
@@ -667,7 +519,7 @@ fn macos_install_click_outside_monitor<R: tauri::Runtime>(app_handle: tauri::App
 
 /// Remove the global mouse click monitor when panel is hidden.
 #[cfg(target_os = "macos")]
-fn macos_remove_click_outside_monitor() {
+pub(crate) fn macos_remove_click_outside_monitor() {
     use objc2_app_kit::NSEvent;
 
     let cell = CLICK_OUTSIDE_MONITOR_PTR.get_or_init(|| Mutex::new(None));
@@ -897,16 +749,16 @@ struct SyncNowResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct PermissionsStatus {
-    platform: String,
-    can_paste: bool,
-    automation_ok: bool,
-    accessibility_ok: bool,
-    details: Option<String>,
+pub(crate) struct PermissionsStatus {
+    pub(crate) platform: String,
+    pub(crate) can_paste: bool,
+    pub(crate) automation_ok: bool,
+    pub(crate) accessibility_ok: bool,
+    pub(crate) details: Option<String>,
     /// Whether running as a bundled .app (true) or dev binary (false)
-    is_bundled: bool,
+    pub(crate) is_bundled: bool,
     /// The path to the executable that needs permissions
-    executable_path: String,
+    pub(crate) executable_path: String,
 }
 
 #[tauri::command]
@@ -1260,156 +1112,7 @@ fn enable_mouse_events(window: tauri::WebviewWindow) -> Result<(), String> {
 /// Returns the path to a PNG version of the app's icon that can be displayed in webview.
 #[tauri::command]
 fn get_app_icon_path(app: tauri::AppHandle, bundle_id: String) -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        
-        // Get the app data directory for caching converted icons
-        let cache_dir = crate::paths::app_data_dir(&app)
-            .map_err(|e| format!("failed to get app data dir: {e}"))?
-            .join("icon_cache");
-        
-        // Create cache directory if it doesn't exist
-        std::fs::create_dir_all(&cache_dir)
-            .map_err(|e| format!("failed to create icon cache dir: {e}"))?;
-        
-        // Check if we have a cached PNG for this bundle ID
-        let safe_bundle_id = bundle_id.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-        let cached_png = cache_dir.join(format!("{}.png", safe_bundle_id));
-        
-        if cached_png.exists() {
-            return Ok(Some(cached_png.to_string_lossy().to_string()));
-        }
-        
-        // Use mdfind to locate the app by bundle ID
-        let output = Command::new("mdfind")
-            .args([&format!("kMDItemCFBundleIdentifier == '{}'", bundle_id)])
-            .output()
-            .map_err(|e| format!("failed to run mdfind: {e}"))?;
-        
-        if !output.status.success() {
-            return Ok(None);
-        }
-        
-        let path = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .map(|s| s.to_string());
-        
-        if let Some(app_path) = path {
-            // Get the icon file from the app bundle
-            // First, try to read Info.plist to get CFBundleIconFile
-            let plist_path = format!("{}/Contents/Info.plist", app_path);
-            
-            // Use defaults read to get the icon file name
-            let icon_output = Command::new("defaults")
-                .args(["read", &plist_path, "CFBundleIconFile"])
-                .output();
-            
-            let mut icns_path: Option<String> = None;
-            
-            if let Ok(icon_out) = icon_output {
-                if icon_out.status.success() {
-                    let mut icon_name = String::from_utf8_lossy(&icon_out.stdout).trim().to_string();
-                    // Add .icns extension if not present
-                    if !icon_name.ends_with(".icns") {
-                        icon_name.push_str(".icns");
-                    }
-                    let icon_path = format!("{}/Contents/Resources/{}", app_path, icon_name);
-                    if std::path::Path::new(&icon_path).exists() {
-                        icns_path = Some(icon_path);
-                    }
-                }
-            }
-            
-            // Fallback: try common icon names
-            if icns_path.is_none() {
-                let fallbacks = ["AppIcon.icns", "app.icns", "icon.icns"];
-                for fallback in fallbacks {
-                    let icon_path = format!("{}/Contents/Resources/{}", app_path, fallback);
-                    if std::path::Path::new(&icon_path).exists() {
-                        icns_path = Some(icon_path);
-                        break;
-                    }
-                }
-            }
-            
-            // Convert .icns to PNG using sips
-            if let Some(icns) = icns_path {
-                let sips_result = Command::new("sips")
-                    .args([
-                        "-s", "format", "png",
-                        "-z", "64", "64",  // Resize to 64x64 for web
-                        &icns,
-                        "--out", &cached_png.to_string_lossy()
-                    ])
-                    .output();
-                
-                if let Ok(sips_out) = sips_result {
-                    if sips_out.status.success() && cached_png.exists() {
-                        return Ok(Some(cached_png.to_string_lossy().to_string()));
-                    }
-                }
-            }
-        }
-        
-        Ok(None)
-    }
-    
-    #[cfg(not(target_os = "macos"))]
-    {
-        #[cfg(target_os = "windows")]
-        {
-            use std::process::Command;
-
-            // On Windows, bundle_id is the full exe path
-            let exe_path = &bundle_id;
-
-            if !std::path::Path::new(exe_path).exists() {
-                return Ok(None);
-            }
-
-            let cache_dir = crate::paths::app_data_dir(&app)
-                .map_err(|e| format!("failed to get app data dir: {e}"))?
-                .join("icon_cache");
-            std::fs::create_dir_all(&cache_dir)
-                .map_err(|e| format!("failed to create icon cache dir: {e}"))?;
-
-            let safe_name = exe_path
-                .replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-            let cached_png = cache_dir.join(format!("{}.png", safe_name));
-
-            if cached_png.exists() {
-                return Ok(Some(cached_png.to_string_lossy().to_string()));
-            }
-
-            // Use PowerShell to extract the icon from the exe and save as PNG
-            let ps_script = format!(
-                r#"Add-Type -AssemblyName System.Drawing; $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('{}'); if ($icon) {{ $bmp = $icon.ToBitmap(); $bmp.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose(); $icon.Dispose() }}"#,
-                exe_path.replace('\'', "''"),
-                cached_png.to_string_lossy().replace('\'', "''")
-            );
-
-            let result = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
-                .output();
-
-            if let Ok(out) = result {
-                if out.status.success() && cached_png.exists() {
-                    return Ok(Some(cached_png.to_string_lossy().to_string()));
-                }
-            }
-
-            Ok(None)
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = app;
-            let _ = bundle_id;
-            Ok(None)
-        }
-    }
+    platform::get_app_icon_path(&app, &bundle_id)
 }
 
 #[tauri::command]
@@ -1445,180 +1148,7 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
 }
 
 fn perform_paste(app: &tauri::AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        use std::time::Duration;
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-
-        eprintln!("[powerpaste] paste_text: starting...");
-
-        // Use a flag to wait for hide completion
-        let hidden = Arc::new(AtomicBool::new(false));
-        let hidden_clone = hidden.clone();
-        let app = app.clone();
-        
-        let _ = app.run_on_main_thread(move || {
-            use objc2::rc::Retained;
-            use objc2::exception;
-            use objc2_app_kit::{NSPanel, NSApplication};
-            use objc2::MainThreadMarker;
-            
-            eprintln!("[powerpaste] paste_text: on main thread, hiding panel...");
-            
-            if let Some(stored) = OVERLAY_PANEL_PTR.get() {
-                let panel: Option<Retained<NSPanel>> = unsafe { 
-                    Retained::retain((*stored as *mut NSPanel).cast()) 
-                };
-                if let Some(panel) = panel {
-                    if panel.isVisible() {
-                        eprintln!("[powerpaste] paste_text: ordering out panel");
-                        let _ = exception::catch(std::panic::AssertUnwindSafe(|| {
-                            panel.orderOut(None);
-                        }));
-                        macos_remove_keyboard_monitor();
-                        macos_remove_click_outside_monitor();
-                        macos_remove_mouse_focus_monitor();
-                    }
-                }
-            }
-            
-            // Hide the entire app to return focus to previous app
-            if let Some(mtm) = MainThreadMarker::new() {
-                let ns_app = NSApplication::sharedApplication(mtm);
-                eprintln!("[powerpaste] paste_text: hiding NSApplication");
-                ns_app.hide(None);
-            }
-            
-            hidden_clone.store(true, Ordering::SeqCst);
-            eprintln!("[powerpaste] paste_text: panel hidden, app hidden");
-        });
-
-        // Wait for hide to complete
-        for _ in 0..50 {
-            if hidden.load(Ordering::SeqCst) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        
-        // Wait for focus to settle
-        std::thread::sleep(Duration::from_millis(200));
-
-        eprintln!("[powerpaste] paste_text: sending Cmd+V...");
-        let output = Command::new("osascript")
-            .args([
-                "-e",
-                "tell application \"System Events\" to keystroke \"v\" using command down",
-            ])
-            .output()
-            .map_err(|e| format!("failed to run osascript for paste: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let msg = if !stderr.is_empty() {
-                stderr
-            } else if !stdout.is_empty() {
-                stdout
-            } else {
-                "osascript paste failed".to_string()
-            };
-            return Err(format!(
-                "Paste failed. On macOS this requires Accessibility + Automation permissions. \
-System Settings → Privacy & Security → Accessibility (enable PowerPaste) and \
-Privacy & Security → Automation (allow controlling System Events). Details: {msg}"
-            ));
-        }
-        eprintln!("[powerpaste] paste_text: done!");
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.hide();
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            use std::time::Duration;
-            use windows::Win32::UI::Input::KeyboardAndMouse::{
-                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-                KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_V,
-            };
-
-            // Wait for focus to return to the previous app
-            std::thread::sleep(Duration::from_millis(200));
-
-            eprintln!("[powerpaste] perform_paste: sending Ctrl+V on Windows...");
-
-            let inputs = [
-                // Ctrl down
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VK_CONTROL,
-                            wScan: 0,
-                            dwFlags: Default::default(),
-                            time: 0,
-                            dwExtraInfo: 0,
-                        },
-                    },
-                },
-                // V down
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VIRTUAL_KEY(VK_V.0),
-                            wScan: 0,
-                            dwFlags: Default::default(),
-                            time: 0,
-                            dwExtraInfo: 0,
-                        },
-                    },
-                },
-                // V up
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VIRTUAL_KEY(VK_V.0),
-                            wScan: 0,
-                            dwFlags: KEYEVENTF_KEYUP,
-                            time: 0,
-                            dwExtraInfo: 0,
-                        },
-                    },
-                },
-                // Ctrl up
-                INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: VK_CONTROL,
-                            wScan: 0,
-                            dwFlags: KEYEVENTF_KEYUP,
-                            time: 0,
-                            dwExtraInfo: 0,
-                        },
-                    },
-                },
-            ];
-
-            let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-            if sent != inputs.len() as u32 {
-                return Err(format!(
-                    "SendInput only injected {sent}/{} events",
-                    inputs.len()
-                ));
-            }
-            eprintln!("[powerpaste] perform_paste: Ctrl+V sent successfully");
-        }
-    }
-
-    Ok(())
+    platform::perform_paste(app)
 }
 
 #[tauri::command]
@@ -1665,231 +1195,29 @@ fn paste_item(app: tauri::AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn check_permissions() -> Result<PermissionsStatus, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-
-        // Detect if running as bundled app or dev binary
-        let exe_path = std::env::current_exe()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let is_bundled = exe_path.contains(".app/Contents/MacOS/");
-
-        // Check Accessibility permission using AXIsProcessTrusted (silent check)
-        let accessibility_ok: bool = unsafe {
-            #[link(name = "ApplicationServices", kind = "framework")]
-            extern "C" {
-                fn AXIsProcessTrusted() -> u8;
-            }
-            let result = AXIsProcessTrusted();
-            eprintln!("[powerpaste] AXIsProcessTrusted returned: {}", result);
-            result != 0
-        };
-        eprintln!("[powerpaste] accessibility_ok: {}, exe_path: {}, is_bundled: {}", accessibility_ok, exe_path, is_bundled);
-
-        // For Automation, we still need to test with osascript since there's no direct API
-        // But we use a simpler check that's less likely to give false positives
-        let automation = Command::new("osascript")
-            .args([
-                "-e",
-                "tell application \"System Events\" to get name of first application process whose frontmost is true",
-            ])
-            .output();
-
-        let (automation_ok, details) = match automation {
-            Ok(out) if out.status.success() => (true, None),
-            Ok(out) => {
-                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                (false, Some(if msg.is_empty() { "Automation check failed".to_string() } else { msg }))
-            }
-            Err(e) => (false, Some(format!("Automation check failed: {e}"))),
-        };
-
-        // Combine the status - need both Accessibility AND Automation for paste to work
-        let can_paste = automation_ok && accessibility_ok;
-        
-        // Build details message
-        let final_details = if !accessibility_ok && !automation_ok {
-            Some("Both Accessibility and Automation permissions are required.".to_string())
-        } else if !accessibility_ok {
-            Some("Accessibility permission is required.".to_string())
-        } else {
-            details
-        };
-
-        return Ok(PermissionsStatus {
-            platform: "macos".to_string(),
-            can_paste,
-            automation_ok,
-            accessibility_ok,
-            details: final_details,
-            is_bundled,
-            executable_path: exe_path,
-        });
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let exe_path = std::env::current_exe()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        return Ok(PermissionsStatus {
-            platform: "windows".to_string(),
-            can_paste: true,
-            automation_ok: true,
-            accessibility_ok: true,
-            details: None,
-            is_bundled: true,
-            executable_path: exe_path,
-        });
-    }
-
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        let exe_path = std::env::current_exe()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        return Ok(PermissionsStatus {
-            platform: "linux".to_string(),
-            can_paste: false,
-            automation_ok: true,
-            accessibility_ok: true,
-            details: Some("Paste automation is not implemented on this platform yet.".to_string()),
-            is_bundled: true,
-            executable_path: exe_path,
-        });
-    }
+    platform::check_permissions()
 }
 
 #[tauri::command]
 fn open_accessibility_settings() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .status()
-            .map_err(|e| format!("failed to open Accessibility settings: {e}"))?;
-        return Ok(());
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // No equivalent permission settings on Windows/Linux
-        Ok(())
-    }
+    platform::open_accessibility_settings()
 }
 
 #[tauri::command]
 fn open_automation_settings() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
-            .status()
-            .map_err(|e| format!("failed to open Automation settings: {e}"))?;
-        return Ok(());
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(())
-    }
+    platform::open_automation_settings()
 }
 
 /// Trigger the macOS Accessibility permission prompt via AXIsProcessTrustedWithOptions.
 /// This shows the system dialog and auto-adds the app to the Accessibility list.
 #[tauri::command]
 fn request_accessibility_permission() -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let trusted: bool = unsafe {
-            #[link(name = "CoreFoundation", kind = "framework")]
-            extern "C" {
-                fn CFStringCreateWithCString(
-                    alloc: *const std::ffi::c_void,
-                    c_str: *const u8,
-                    encoding: u32,
-                ) -> *const std::ffi::c_void;
-                fn CFDictionaryCreate(
-                    alloc: *const std::ffi::c_void,
-                    keys: *const *const std::ffi::c_void,
-                    values: *const *const std::ffi::c_void,
-                    num_values: isize,
-                    key_callbacks: *const std::ffi::c_void,
-                    value_callbacks: *const std::ffi::c_void,
-                ) -> *const std::ffi::c_void;
-                fn CFRelease(cf: *const std::ffi::c_void);
-                static kCFBooleanTrue: *const std::ffi::c_void;
-                static kCFTypeDictionaryKeyCallBacks: u8;
-                static kCFTypeDictionaryValueCallBacks: u8;
-            }
-
-            #[link(name = "ApplicationServices", kind = "framework")]
-            extern "C" {
-                fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> u8;
-            }
-
-            // "AXTrustedCheckOptionPrompt" — the key that triggers the prompt
-            let key_cstr = b"AXTrustedCheckOptionPrompt\0";
-            let key = CFStringCreateWithCString(
-                std::ptr::null(),
-                key_cstr.as_ptr(),
-                0x08000100, // kCFStringEncodingUTF8
-            );
-
-            let keys = [key];
-            let values = [kCFBooleanTrue];
-            let dict = CFDictionaryCreate(
-                std::ptr::null(),
-                keys.as_ptr(),
-                values.as_ptr(),
-                1,
-                &kCFTypeDictionaryKeyCallBacks as *const u8 as *const std::ffi::c_void,
-                &kCFTypeDictionaryValueCallBacks as *const u8 as *const std::ffi::c_void,
-            );
-
-            let result = AXIsProcessTrustedWithOptions(dict);
-            eprintln!("[powerpaste] AXIsProcessTrustedWithOptions(prompt:true) returned: {}", result);
-
-            CFRelease(dict);
-            CFRelease(key);
-
-            result != 0
-        };
-        return Ok(trusted);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // No accessibility permission model on Windows/Linux; always trusted
-        Ok(true)
-    }
+    platform::request_accessibility_permission()
 }
 /// targeting System Events. This causes macOS to show the "allow control" dialog.
 #[tauri::command]
 fn request_automation_permission() -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        let output = Command::new("osascript")
-            .args([
-                "-e",
-                "tell application \"System Events\" to return 1",
-            ])
-            .output()
-            .map_err(|e| format!("failed to run osascript: {e}"))?;
-
-        let ok = output.status.success();
-        if !ok {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[powerpaste] request_automation_permission osascript stderr: {}", stderr);
-        }
-        return Ok(ok);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // No automation permission model on Windows/Linux; always allowed
-        Ok(true)
-    }
+    platform::request_automation_permission()
 }
 
 #[tauri::command]
@@ -1955,27 +1283,7 @@ fn suspend_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), 
         .unregister_all()
         .map_err(|e| format!("failed to unregister hotkeys: {e}"))?;
 
-    // On Windows, disable WebView2 browser accelerator keys (Ctrl+Shift+V, Ctrl+F, etc.)
-    // so those combos fire as normal keydown events instead of being consumed by the browser.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = webview.with_webview(move |wv| {
-            unsafe {
-                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
-                use windows::core::Interface;
-                let controller = wv.controller();
-                if let Ok(core) = controller.CoreWebView2() {
-                    if let Ok(settings) = core.Settings() {
-                        if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
-                            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false.into());
-                            eprintln!("[powerpaste] disabled browser accelerator keys for recording");
-                        }
-                    }
-                }
-            }
-        });
-    }
-    let _ = webview;
+    platform::suspend_browser_accelerator_keys(&webview);
 
     Ok(())
 }
@@ -1987,25 +1295,7 @@ fn resume_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), S
     eprintln!("[powerpaste] resuming global hotkey: {}", settings.hotkey);
     register_hotkey(&app, &settings.hotkey)?;
 
-    #[cfg(target_os = "windows")]
-    {
-        let _ = webview.with_webview(move |wv| {
-            unsafe {
-                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
-                use windows::core::Interface;
-                let controller = wv.controller();
-                if let Ok(core) = controller.CoreWebView2() {
-                    if let Ok(settings) = core.Settings() {
-                        if let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() {
-                            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(true.into());
-                            eprintln!("[powerpaste] re-enabled browser accelerator keys");
-                        }
-                    }
-                }
-            }
-        });
-    }
-    let _ = webview;
+    platform::resume_browser_accelerator_keys(&webview);
 
     Ok(())
 }
@@ -2646,8 +1936,8 @@ fn toggle_nspanel_overlay(
         eprintln!("[powerpaste] showing nspanel overlay");
         
         // Remember frontmost app before showing
-        if let Some(name) = macos_query_frontmost_app_name() {
-            macos_set_last_frontmost_app_name(name.clone());
+        if let Some(name) = platform::query_frontmost_app_name() {
+            platform::set_last_frontmost_app_name(name.clone());
             eprintln!("[powerpaste] saved frontmost app: {}", name);
         }
         
@@ -2667,7 +1957,7 @@ fn toggle_nspanel_overlay(
             let (x, y) = match ui_mode {
                 models::UiMode::Floating => {
                     // Position below cursor (vertically arranged cards)
-                    if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
+                    if let Some((cursor_x, cursor_y)) = platform::get_cursor_position() {
                         // Align left edge to cursor, position below cursor
                         let mut calc_x = cursor_x;
                         // Position 10px below cursor (in Cocoa coordinates, y increases upward)
@@ -2804,12 +2094,12 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         // This lets us restore focus when the user chooses an item to paste.
         // Skip dev tools that shouldn't be paste targets.
         eprintln!("[powerpaste] querying frontmost app...");
-        if let Some(name) = macos_query_frontmost_app_name() {
+        if let Some(name) = platform::query_frontmost_app_name() {
             eprintln!("[powerpaste] frontmost app query returned: {}", name);
             let skip_apps = ["node", "PowerPaste", "Code Helper"];
             if !skip_apps.iter().any(|s| name.contains(s)) {
                 eprintln!("[powerpaste] recording frontmost app: {}", name);
-                macos_set_last_frontmost_app_name(name);
+                platform::set_last_frontmost_app_name(name);
             } else {
                 eprintln!("[powerpaste] skipping frontmost app (dev tool): {}", name);
             }
@@ -2844,7 +2134,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         match ui_mode {
             models::UiMode::Floating => {
                 // Position below cursor (vertically arranged cards)
-                if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
+                if let Some((cursor_x, cursor_y)) = platform::get_cursor_position() {
                     // Align left edge to cursor, position below cursor
                     let mut x = cursor_x;
                     let mut y = cursor_y - target.size.height - 10.0; // 10px below cursor
@@ -3008,7 +2298,7 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     match ui_mode {
         models::UiMode::Floating => {
             // Position below cursor (vertically arranged cards)
-            if let Some((cursor_x, cursor_y)) = macos_get_cursor_position() {
+            if let Some((cursor_x, cursor_y)) = platform::get_cursor_position() {
                 // Align left edge to cursor, position below cursor
                 let mut x = cursor_x;
                 let mut y = cursor_y - target.size.height - 10.0;
@@ -3184,12 +2474,12 @@ fn macos_toggle_overlay_panel<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     // Snapshot the current frontmost app (skip dev tools)
     eprintln!("[powerpaste] (first show) querying frontmost app...");
-    if let Some(name) = macos_query_frontmost_app_name() {
+    if let Some(name) = platform::query_frontmost_app_name() {
         eprintln!("[powerpaste] (first show) frontmost app: {}", name);
         let skip_apps = ["node", "PowerPaste", "Code Helper"];
         if !skip_apps.iter().any(|s| name.contains(s)) {
             eprintln!("[powerpaste] (first show) recording frontmost app: {}", name);
-            macos_set_last_frontmost_app_name(name);
+            platform::set_last_frontmost_app_name(name);
         } else {
             eprintln!("[powerpaste] (first show) skipping (dev tool): {}", name);
         }
@@ -3332,55 +2622,6 @@ fn position_as_bottom_overlay<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     Ok(())
 }
 
-/// Configure the window as a frameless floating popup on Windows:
-/// - Remove from taskbar / Alt+Tab (WS_EX_TOOLWINDOW)
-/// - Rounded corners on Windows 11+ (DWM)
-/// - Drop shadow via DWM
-#[cfg(target_os = "windows")]
-fn windows_configure_floating_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW,
-    };
-
-    // Skip taskbar via Tauri API
-    let _ = window.set_skip_taskbar(true);
-
-    // Access the raw HWND to set window styles and DWM attributes
-    if let Ok(raw) = window.hwnd() {
-        let hwnd = HWND(raw.0);
-        unsafe {
-            // Set WS_EX_TOOLWINDOW to hide from taskbar and Alt+Tab,
-            // and remove WS_EX_APPWINDOW if present
-            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            let new_style = (ex_style | WS_EX_TOOLWINDOW.0) & !WS_EX_APPWINDOW.0;
-            SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
-
-            // Enable rounded corners on Windows 11+
-            // DWM_WINDOW_CORNER_PREFERENCE: DWMWCP_ROUND = 2
-            let corner_pref: u32 = 2; // DWMWCP_ROUND
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_pref as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-
-            // Enable dark mode title bar to match app theme
-            let dark_mode: u32 = 1;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_IMMERSIVE_DARK_MODE,
-                &dark_mode as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            );
-        }
-    }
-}
-
 /// Position the window near the cursor for floating mode (non-macOS).
 #[cfg(not(target_os = "macos"))]
 fn position_floating_near_cursor<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
@@ -3388,9 +2629,7 @@ fn position_floating_near_cursor<R: tauri::Runtime>(window: &tauri::WebviewWindo
         .set_always_on_top(true)
         .map_err(|e| format!("failed to set always-on-top: {e}"))?;
 
-    // On Windows, style the window as a frameless floating popup
-    #[cfg(target_os = "windows")]
-    windows_configure_floating_window(window);
+    platform::configure_floating_window(window);
 
     let monitor = window
         .current_monitor()
@@ -3409,9 +2648,9 @@ fn position_floating_near_cursor<R: tauri::Runtime>(window: &tauri::WebviewWindo
         .map_err(|e| format!("failed to set window size: {e}"))?;
 
     // Try to position below the cursor
-    #[cfg(target_os = "windows")]
-    if let Some((cx, cy)) = windows_get_cursor_position() {
-        // cx, cy are in physical screen pixels
+    if let Some((cx, cy)) = platform::get_cursor_position() {
+        let cx = cx as i32;
+        let cy = cy as i32;
         let mut x = cx;
         // 10 logical pixels below cursor
         let mut y = cy + (10.0 * scale) as i32;
@@ -3546,12 +2785,12 @@ fn macos_set_overlay_window_active<R: tauri::Runtime>(
                 // This lets us restore focus when the user chooses an item to paste.
                 // Skip dev tools that shouldn't be paste targets.
                 eprintln!("[powerpaste] (hotkey) querying frontmost app...");
-                if let Some(name) = macos_query_frontmost_app_name() {
+                if let Some(name) = platform::query_frontmost_app_name() {
                     eprintln!("[powerpaste] (hotkey) frontmost app: {}", name);
                     let skip_apps = ["node", "PowerPaste", "Code Helper"];
                     if !skip_apps.iter().any(|s| name.contains(s)) {
                         eprintln!("[powerpaste] (hotkey) recording frontmost app: {}", name);
-                        macos_set_last_frontmost_app_name(name);
+                        platform::set_last_frontmost_app_name(name);
                     } else {
                         eprintln!("[powerpaste] (hotkey) skipping (dev tool): {}", name);
                     }
