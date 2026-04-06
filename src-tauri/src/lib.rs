@@ -1291,11 +1291,12 @@ fn suspend_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), 
 /// Re-register the global hotkey and restore browser accelerator keys after recording.
 #[tauri::command]
 fn resume_hotkey(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    // Always restore browser accelerator keys first, even if registration fails
+    platform::resume_browser_accelerator_keys(&webview);
+
     let settings = settings_store::load_or_init_settings(&app)?;
     eprintln!("[powerpaste] resuming global hotkey: {}", settings.hotkey);
     register_hotkey(&app, &settings.hotkey)?;
-
-    platform::resume_browser_accelerator_keys(&webview);
 
     Ok(())
 }

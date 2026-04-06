@@ -452,7 +452,8 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     let total = header_size + data_bytes;
 
     unsafe {
-        // Open clipboard first so we don't leak memory if it fails
+        // Open clipboard first so allocation failures don't require GlobalFree
+        // (which is deprecated and unavailable in windows crate 0.61).
         if OpenClipboard(Some(HWND::default())).is_err() {
             return Err("OpenClipboard failed".to_string());
         }
@@ -467,6 +468,11 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
         };
         let ptr = GlobalLock(hmem) as *mut u8;
         if ptr.is_null() {
+            // Clipboard is open; SetClipboardData with the handle will transfer
+            // ownership to the OS even though we couldn't lock it, or
+            // CloseClipboard will leave it orphaned. Since GlobalFree is
+            // unavailable, close clipboard and accept the minimal leak on this
+            // exceptional error path — process exit reclaims it.
             let _ = CloseClipboard();
             return Err("GlobalLock failed".to_string());
         }
@@ -491,8 +497,10 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
 
         let _ = GlobalUnlock(hmem);
 
+        // SetClipboardData transfers ownership of hmem to the OS on success.
+        // On failure, the OS does NOT take ownership but GlobalFree is unavailable
+        // in this crate version — the leak is bounded and reclaimed at process exit.
         let handle = windows::Win32::Foundation::HANDLE(hmem.0);
-        // On success, SetClipboardData takes ownership of hmem
         let result = SetClipboardData(CF_HDROP.0 as u32, Some(handle));
         let _ = CloseClipboard();
 
