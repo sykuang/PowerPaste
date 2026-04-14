@@ -33,7 +33,7 @@ base64 = "0.22"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 keyring = "3"
-rand = "0.8"
+rand = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
