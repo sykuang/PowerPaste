@@ -17,6 +17,10 @@ import {
   setLaunchAtStartup,
   connectSyncProvider,
   disconnectSyncProvider,
+  getAppVersion,
+  checkForUpdate,
+  downloadAndInstallUpdate,
+  type UpdateInfo,
 } from "../api";
 import { PowerPasteLogo } from "./PowerPasteLogo";
 import { useAutoHideScrollbar } from "../hooks/useAutoHideScrollbar";
@@ -150,6 +154,55 @@ export function SettingsModal(props: SettingsModalProps) {
   const [trashError, setTrashError] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const settingsContentRef = useRef<HTMLDivElement>(null);
+
+  // App version + updater state
+  const [appVersion, setAppVersion] = useState<string>("");
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<string>("");
+  const [updateBusy, setUpdateBusy] = useState<"idle" | "checking" | "installing">("idle");
+  useEffect(() => {
+    getAppVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
+  }, []);
+
+  const handleCheckForUpdates = useCallback(async () => {
+    setUpdateBusy("checking");
+    setUpdateStatus("Checking for updates…");
+    try {
+      const info = await checkForUpdate();
+      setUpdateInfo(info);
+      if (info.available) {
+        setUpdateStatus(`Update available: v${info.newVersion}`);
+      } else {
+        setUpdateStatus(`You're up to date (v${info.currentVersion})`);
+      }
+    } catch (e) {
+      setUpdateStatus(`Update check failed: ${String(e)}`);
+    } finally {
+      setUpdateBusy("idle");
+    }
+  }, []);
+
+  const handleInstallUpdate = useCallback(async () => {
+    if (!updateInfo?.available) return;
+    setUpdateBusy("installing");
+    setUpdateStatus("Downloading update…");
+    try {
+      await downloadAndInstallUpdate(updateInfo, (downloaded, total) => {
+        if (total) {
+          const pct = Math.round((downloaded / total) * 100);
+          setUpdateStatus(`Downloading update… ${pct}%`);
+        } else {
+          setUpdateStatus(`Downloading update… ${(downloaded / 1024 / 1024).toFixed(1)} MB`);
+        }
+      });
+      setUpdateStatus("Installed. Relaunching…");
+    } catch (e) {
+      setUpdateStatus(`Install failed: ${String(e)}`);
+      setUpdateBusy("idle");
+    }
+  }, [updateInfo]);
 
   // Auto-hide scrollbar overlay
   useAutoHideScrollbar(settingsContentRef);
@@ -683,6 +736,42 @@ export function SettingsModal(props: SettingsModalProps) {
               </label>
             </div>
             {launchAtStartupError && <div className="settingsError">{launchAtStartupError}</div>}
+
+            {/* About / Updates */}
+            <div className="settingsRow">
+              <div className="settingsRowLabel">
+                <span className="settingsRowTitle">About</span>
+                <span className="settingsRowHint">
+                  PowerPaste {appVersion ? `v${appVersion}` : ""}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                {updateInfo?.available ? (
+                  <button
+                    className="settingsThemeBtn active"
+                    type="button"
+                    onClick={handleInstallUpdate}
+                    disabled={updateBusy !== "idle"}
+                  >
+                    {updateBusy === "installing" ? "Installing…" : `Install v${updateInfo.newVersion}`}
+                  </button>
+                ) : (
+                  <button
+                    className="settingsThemeBtn"
+                    type="button"
+                    onClick={handleCheckForUpdates}
+                    disabled={updateBusy !== "idle"}
+                  >
+                    {updateBusy === "checking" ? "Checking…" : "Check for updates"}
+                  </button>
+                )}
+                {updateStatus && (
+                  <span className="settingsRowHint" style={{ fontSize: 11 }}>
+                    {updateStatus}
+                  </span>
+                )}
+              </div>
+            </div>
           </section>
           )}
 

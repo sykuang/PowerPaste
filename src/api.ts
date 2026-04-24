@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 
 export type SyncProvider =
   | "icloud_drive"
@@ -352,4 +355,63 @@ export async function listPinboardItemsPaginated(args: {
 /** Get the file system path to an app's icon by its bundle ID */
 export async function getAppIconPath(bundleId: string): Promise<string | null> {
   return invoke("get_app_icon_path", { bundleId });
+}
+
+/** Get the running app version (from tauri.conf.json). */
+export async function getAppVersion(): Promise<string> {
+  return getVersion();
+}
+
+export type UpdateInfo = {
+  available: boolean;
+  currentVersion: string;
+  /** Only present when available=true */
+  newVersion?: string;
+  notes?: string;
+  /** Held internally so the caller can later install without re-checking. */
+  _update?: Update;
+};
+
+/**
+ * Check for an available update from the configured updater endpoint.
+ * Pure check — does NOT download or install. Network failures throw.
+ */
+export async function checkForUpdate(): Promise<UpdateInfo> {
+  const currentVersion = await getVersion();
+  const update = await check();
+  if (!update) {
+    return { available: false, currentVersion };
+  }
+  return {
+    available: true,
+    currentVersion,
+    newVersion: update.version,
+    notes: update.body ?? undefined,
+    _update: update,
+  };
+}
+
+/**
+ * Download and install an already-checked update, then relaunch the app.
+ * Throws if installation fails.
+ */
+export async function downloadAndInstallUpdate(
+  info: UpdateInfo,
+  onProgress?: (downloaded: number, total: number | null) => void,
+): Promise<void> {
+  if (!info._update) {
+    throw new Error("No update payload to install");
+  }
+  let downloaded = 0;
+  let contentLength: number | null = null;
+  await info._update.downloadAndInstall((event) => {
+    if (event.event === "Started") {
+      contentLength = event.data.contentLength ?? null;
+      onProgress?.(0, contentLength);
+    } else if (event.event === "Progress") {
+      downloaded += event.data.chunkLength;
+      onProgress?.(downloaded, contentLength);
+    }
+  });
+  await relaunch();
 }
