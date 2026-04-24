@@ -4,6 +4,7 @@ import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import {
   checkPermissions,
+  checkForUpdate,
   closeWindowByLabel,
   deleteItem,
   deleteItemForever,
@@ -216,6 +217,34 @@ function App() {
   useEffect(() => {
     selectedIdsRef.current = selectedIds;
   }, [selectedIds]);
+
+  // Silent update check on startup. Runs only in the main app window
+  // (not the settings or permissions sub-windows) and only logs the result.
+  // The user-facing install flow lives in SettingsModal.
+  useEffect(() => {
+    if (IS_SETTINGS_WINDOW || IS_PERMISSIONS_WINDOW) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      checkForUpdate()
+        .then((info) => {
+          if (cancelled) return;
+          if (info.available) {
+            console.log(
+              `[powerpaste] update available: ${info.currentVersion} -> ${info.newVersion}`,
+            );
+          } else {
+            console.log(`[powerpaste] up to date (v${info.currentVersion})`);
+          }
+        })
+        .catch((err) => {
+          console.warn("[powerpaste] update check failed:", err);
+        });
+    }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const selectedItems = useMemo(() => {
     if (selectedIds.size === 0) return [];

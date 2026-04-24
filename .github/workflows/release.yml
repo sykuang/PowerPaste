@@ -47,6 +47,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Code signing (optional — set these secrets to enable)
           # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -91,12 +94,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "PowerPaste ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: "See the [changelog](https://github.com/${{ github.repository }}/commits/${{ github.event.inputs.tag || github.ref_name }}) for details."
           releaseDraft: true
           prerelease: false
+          updaterJsonPreferNsis: true
           args: --target x86_64-pc-windows-msvc
 
   build-windows-arm64:
@@ -128,12 +134,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "PowerPaste ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: "See the [changelog](https://github.com/${{ github.repository }}/commits/${{ github.event.inputs.tag || github.ref_name }}) for details."
           releaseDraft: true
           prerelease: false
+          updaterJsonPreferNsis: true
           args: --target aarch64-pc-windows-msvc
 
   publish-release:
