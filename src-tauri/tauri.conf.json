@@ -54,7 +54,7 @@
       "endpoints": [
         "https://github.com/sykuang/PowerPaste/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_ME_WITH_BASE64_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY4NDg0ODM1QUIxMDYzNkUKUldSdVl4Q3JOVWhJK0locjdCaitNdnhrT3JWQUVkUFR4RkhEMEpNRDZsNDRCdHdrc1FsY2F6VUMK"
     }
   }
 }
