@@ -110,7 +110,7 @@ export function PermissionsModal(props: PermissionsModalProps) {
               </>
             ) : null}
             <div className="hint">
-              After granting permissions, click <strong>Re-check</strong> below to verify.
+              PowerPaste re-checks automatically when you return from System Settings.
             </div>
           </div>
         ) : null}

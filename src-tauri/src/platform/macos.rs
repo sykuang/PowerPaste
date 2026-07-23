@@ -3,17 +3,16 @@ use std::sync::{Mutex, OnceLock};
 
 // --- Last frontmost app tracking ---
 
-static LAST_FRONTMOST_APP_NAME: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static LAST_FRONTMOST_APP: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
 
 pub fn set_last_frontmost_app_name(name: String) {
-    let cell = LAST_FRONTMOST_APP_NAME.get_or_init(|| Mutex::new(None));
+    let cell = LAST_FRONTMOST_APP.get_or_init(|| Mutex::new(None));
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
-    *guard = Some(name);
+    *guard = query_frontmost_app_bundle_id().map(|bundle_id| (name, bundle_id));
 }
 
-#[allow(dead_code)]
-pub fn get_last_frontmost_app_name() -> Option<String> {
-    let cell = LAST_FRONTMOST_APP_NAME.get_or_init(|| Mutex::new(None));
+fn get_last_frontmost_app() -> Option<(String, String)> {
+    let cell = LAST_FRONTMOST_APP.get_or_init(|| Mutex::new(None));
     let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     guard.clone()
 }
@@ -52,6 +51,10 @@ fn query_frontmost_app_bundle_id() -> Option<String> {
 
 pub fn query_frontmost_app_info() -> (Option<String>, Option<String>) {
     (query_frontmost_app_name(), query_frontmost_app_bundle_id())
+}
+
+fn is_paste_target_bundle_frontmost(target_bundle_id: &str, current: Option<&str>) -> bool {
+    current == Some(target_bundle_id)
 }
 
 // --- Cursor position ---
@@ -116,13 +119,57 @@ pub fn perform_paste(app: &tauri::AppHandle) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    std::thread::sleep(Duration::from_millis(200));
+    if !hidden.load(Ordering::SeqCst) {
+        return Err("timed out hiding PowerPaste before paste".to_string());
+    }
+
+    let (target_name, target_bundle_id) = get_last_frontmost_app()
+        .ok_or_else(|| "no previous app available to receive paste".to_string())?;
+    let status = Command::new("open")
+        .args(["-b", &target_bundle_id])
+        .status()
+        .map_err(|e| format!("failed to reactivate {target_name}: {e}"))?;
+    if !status.success() {
+        return Err(format!("failed to reactivate {target_name}"));
+    }
+
+    for _ in 0..50 {
+        let current = query_frontmost_app_bundle_id();
+        if is_paste_target_bundle_frontmost(&target_bundle_id, current.as_deref()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    if !is_paste_target_bundle_frontmost(
+        &target_bundle_id,
+        query_frontmost_app_bundle_id().as_deref(),
+    ) {
+        return Err(format!(
+            "timed out waiting for {target_name} to receive paste"
+        ));
+    }
 
     eprintln!("[powerpaste] paste_text: sending Cmd+V...");
     let output = Command::new("osascript")
         .args([
             "-e",
-            "tell application \"System Events\" to keystroke \"v\" using command down",
+            "on run argv",
+            "-e",
+            "set targetBundleId to item 1 of argv",
+            "-e",
+            "tell application \"System Events\"",
+            "-e",
+            "set frontmostBundleId to bundle identifier of first application process whose frontmost is true",
+            "-e",
+            "if frontmostBundleId is not equal to targetBundleId then error \"paste target lost focus\"",
+            "-e",
+            "keystroke \"v\" using command down",
+            "-e",
+            "end tell",
+            "-e",
+            "end run",
+            &target_bundle_id,
         ])
         .output()
         .map_err(|e| format!("failed to run osascript for paste: {e}"))?;
@@ -546,4 +593,25 @@ pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_paste_target_bundle_frontmost;
+
+    #[test]
+    fn paste_target_bundle_must_be_frontmost_before_pasting() {
+        assert!(is_paste_target_bundle_frontmost(
+            "com.apple.TextEdit",
+            Some("com.apple.TextEdit")
+        ));
+        assert!(!is_paste_target_bundle_frontmost(
+            "com.apple.TextEdit",
+            Some("com.apple.finder")
+        ));
+        assert!(!is_paste_target_bundle_frontmost(
+            "com.apple.TextEdit",
+            None
+        ));
+    }
 }

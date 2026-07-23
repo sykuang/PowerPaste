@@ -1,7 +1,6 @@
 use crate::models::{ConnectedProviderInfo, Settings, SyncProvider, UiMode};
 use crate::paths::{app_data_dir, settings_path};
 use base64::Engine as _;
-use rand::RngCore;
 use std::fs;
 
 const KEYRING_SERVICE: &str = "PowerPaste";
@@ -200,7 +199,7 @@ pub fn ensure_sync_salt_b64<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut se
         return Ok(settings);
     }
     let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::fill(&mut salt);
     settings.sync_salt_b64 = Some(base64::engine::general_purpose::STANDARD.encode(salt));
     save_settings(app, &settings)?;
     Ok(settings)
@@ -209,6 +208,6 @@ pub fn ensure_sync_salt_b64<R: tauri::Runtime>(app: &tauri::AppHandle<R>, mut se
 fn new_device_id() -> String {
     // Random, stable per-install identifier.
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }

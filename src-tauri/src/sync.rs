@@ -5,7 +5,6 @@ use crate::settings_store;
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -51,7 +50,7 @@ fn encrypt(passphrase: &str, salt: &[u8], plaintext: &[u8]) -> Result<SyncEncryp
     let cipher = ChaCha20Poly1305::new(key);
 
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ct = cipher
