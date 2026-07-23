@@ -15,6 +15,7 @@ dist-ssr
 # Local Copilot memory
 .memory/
 .shared/
+.worktrees/
 
 # Rust / Tauri
 target/
