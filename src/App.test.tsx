@@ -99,6 +99,23 @@ import App from "./App";
 import { writeClipboardText, pasteItem } from "./api";
 
 describe("App", () => {
+  it("rechecks permissions when the permissions window regains focus", async () => {
+    window.history.pushState({}, "", "/?permissions=1");
+    vi.resetModules();
+    const { checkPermissions } = await import("./api");
+    const { default: PermissionsApp } = await import("./App");
+    const check = vi.mocked(checkPermissions);
+    check.mockClear();
+
+    render(<PermissionsApp />);
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+    window.history.pushState({}, "", "/");
+  });
+
   it("renders and shows tray clipboard items", async () => {
     render(<App />);
 

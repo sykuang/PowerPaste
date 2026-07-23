@@ -722,7 +722,11 @@ function App() {
     if (!IS_PERMISSIONS_WINDOW) return;
 
     let cancelled = false;
-    void (async () => {
+    let checking = false;
+
+    const refreshPermissions = async () => {
+      if (checking) return;
+      checking = true;
       setCheckingPermissions(true);
       try {
         const res = await checkPermissions();
@@ -740,12 +744,18 @@ function App() {
           executable_path: "",
         });
       } finally {
+        checking = false;
         if (!cancelled) setCheckingPermissions(false);
       }
-    })();
+    };
+
+    const onFocus = () => void refreshPermissions();
+    window.addEventListener("focus", onFocus);
+    void refreshPermissions();
 
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
