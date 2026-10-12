@@ -149,7 +149,7 @@ pub fn optimize(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Insert a text item with optional content type detection.
-/// If an item with the same text already exists, move it to the top by updating its timestamp.
+/// Deduplicate matching text without merging file copies with plain-text paths.
 #[allow(dead_code)]
 pub fn insert_text_if_new_with_type(
     app: &tauri::AppHandle,
@@ -160,7 +160,7 @@ pub fn insert_text_if_new_with_type(
 }
 
 /// Insert a text item with source app information.
-/// If an item with the same text already exists, move it to the top by updating its timestamp.
+/// Deduplicate matching text without merging file copies with plain-text paths.
 pub fn insert_text_with_source_app(
     app: &tauri::AppHandle,
     text: &str,
@@ -174,16 +174,31 @@ pub fn insert_text_with_source_app(
     }
 
     let conn = open(app)?;
+    insert_text_with_connection(
+        &conn,
+        text,
+        content_type,
+        source_app_name,
+        source_app_bundle_id,
+    )
+}
+
+fn insert_text_with_connection(
+    conn: &Connection,
+    text: &str,
+    content_type: Option<String>,
+    source_app_name: Option<String>,
+    source_app_bundle_id: Option<String>,
+) -> Result<Option<ClipboardItem>, String> {
     let now = now_ms();
 
-    // Check if this exact text already exists anywhere in the clipboard
-    // Also check for file items since file paths can be read as text by arboard
+    // A copied file and its path text must remain separate history entries.
     let mut stmt = conn
-        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE (kind = 'text' OR kind = 'file' OR content_type = 'file') AND text = ?1 LIMIT 1")
+        .prepare("SELECT id, kind, text, created_at_ms, pinned, pinboard, image_width, image_height, image_size_bytes, image_mime, file_paths, content_type, source_app_name, source_app_bundle_id, is_trashed, deleted_at_ms FROM clipboard_items WHERE (kind = 'text' OR kind = 'file' OR content_type = 'file') AND text = ?1 AND (kind = 'file' OR COALESCE(content_type, '') = 'file') = ?2 LIMIT 1")
         .map_err(|e| format!("failed to prepare query: {e}"))?;
     
     let existing: Option<ClipboardItem> = stmt
-        .query_row(params![text], row_to_item)
+        .query_row(params![text, content_type.as_deref() == Some("file")], row_to_item)
         .optional()
         .map_err(|e| format!("failed to check existing item: {e}"))?;
 
@@ -1085,6 +1100,59 @@ impl<T> OptionalExt<T> for Result<T, rusqlite::Error> {
             Ok(v) => Ok(Some(v)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_text_with_connection, migrate};
+    use crate::models::ClipboardItemKind;
+    use rusqlite::Connection;
+
+    #[test]
+    fn file_and_path_text_do_not_deduplicate_each_other() {
+        for types in [[Some("file"), None], [None, Some("file")]] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            migrate(&mut conn).unwrap();
+            let path = "/Photos/photo.jpg";
+            let mut ids = Vec::new();
+
+            for content_type in types {
+                let item = insert_text_with_connection(
+                    &conn,
+                    path,
+                    content_type.map(str::to_string),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .expect("a file and its path text must have separate history entries");
+                assert_eq!(item.kind, ClipboardItemKind::Text);
+                assert_eq!(item.text, path);
+                assert_eq!(item.content_type.as_deref(), content_type);
+                ids.push(item.id);
+            }
+            assert_ne!(ids[0], ids[1]);
+
+            for (content_type, id) in types.into_iter().zip(ids) {
+                if let Some(item) = insert_text_with_connection(
+                    &conn,
+                    path,
+                    content_type.map(str::to_string),
+                    None,
+                    None,
+                )
+                .unwrap()
+                {
+                    assert_eq!(item.id, id);
+                    assert_eq!(item.content_type.as_deref(), content_type);
+                }
+            }
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 2);
         }
     }
 }
