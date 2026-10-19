@@ -37,6 +37,7 @@ Most clipboard managers either lack sync, charge a subscription for it, or route
 ## Features
 
 - **Clipboard history** — text, images, and files with automatic content-type detection
+- **Paths stay text** — copying a pathname keeps it as text; copying a file in Finder or Explorer keeps it as a file, even when an image preview is available
 - **Full-text search** — SQLite FTS5 with query caching
 - **Encrypted sync** — ChaCha20-Poly1305 + Argon2 key derivation; passphrase stored in OS keychain
 - **Folder-based sync** — works with iCloud Drive, OneDrive, Google Drive, or any synced folder

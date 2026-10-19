@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 /// Maximum image size in bytes to store (5MB)
 const MAX_IMAGE_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 
-/// Detect content type from text
+/// Detect text previews without interpreting path text as a copied file.
 fn detect_content_type(text: &str) -> Option<String> {
     let trimmed = text.trim();
     
@@ -16,21 +16,6 @@ fn detect_content_type(text: &str) -> Option<String> {
         // Single URL on one line
         if !trimmed.contains('\n') && !trimmed.contains(' ') {
             return Some("url".to_string());
-        }
-    }
-    
-    // Check for file paths (macOS/Unix and Windows)
-    if trimmed.starts_with('/') || trimmed.starts_with("file://") {
-        if std::path::Path::new(trimmed).exists() {
-            return Some("file".to_string());
-        }
-    }
-    
-    // Windows paths
-    if trimmed.len() >= 3 {
-        let chars: Vec<char> = trimmed.chars().take(3).collect();
-        if chars.len() >= 3 && chars[0].is_ascii_alphabetic() && chars[1] == ':' && (chars[2] == '\\' || chars[2] == '/') {
-            return Some("file".to_string());
         }
     }
     
@@ -46,13 +31,12 @@ fn image_hash(data: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// Calculate hash for text deduplication (normalizes whitespace)
-fn text_hash(text: &str) -> u64 {
+/// Calculate hash for text deduplication, keeping file copies distinct from path text.
+fn text_hash(text: &str, content_type: Option<&str>) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    // Normalize: trim and collapse whitespace differences
-    text.trim().hash(&mut hasher);
+    (text.trim(), content_type).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -112,109 +96,101 @@ impl ClipboardWatcher {
                 let mut did_change = false;
                 let mut handled = false;
 
-                // Try to get image from clipboard first
-                if let Some(ref mut cb) = clipboard.as_mut().ok() {
-                    if let Ok(image) = cb.get_image() {
-                        let image_bytes = image.bytes.as_ref();
-                        let hash = image_hash(image_bytes);
+                // Native file copies take precedence over accompanying image or text formats.
+                if let Some(file_paths) = crate::platform::get_clipboard_file_urls() {
+                    handled = true;
+                    let text = file_paths.join("\n");
+                    let current_hash = text_hash(&text, Some("file"));
 
-                        // Skip if same as last image (fallback for non-macOS or same content)
-                        if last_image_hash != Some(hash) {
-                            let size_bytes = image_bytes.len() as u64;
-                            
-                            // Only store if within size limit
-                            if size_bytes <= MAX_IMAGE_SIZE_BYTES {
-                                // Use cached source app info from when clipboard changed
-                                let (source_app_name, source_app_bundle_id) = cached_source_app
-                                    .clone()
-                                    .unwrap_or_else(|| (None, None));
-                                eprintln!("[powerpaste] inserting image from {:?}", source_app_name);
-                                let encoded_image = crate::platform::get_clipboard_image_encoded();
-                                
-                                match db::insert_image_with_source_app(
-                                    &app,
-                                    image_bytes,
-                                    image.width as u32,
-                                    image.height as u32,
-                                    source_app_name,
-                                    source_app_bundle_id,
-                                    encoded_image,
-                                ) {
-                                    Ok(Some(item)) => {
-                                        last_image_hash = Some(hash);
-                                        processed_this_change = true;
-                                        did_change = true;
-                                        handled = true;
-                                        let _ = app.emit("powerpaste://new_item", item);
-                                    }
-                                    Ok(None) => {
-                                        last_image_hash = Some(hash);
-                                        processed_this_change = true;
-                                        did_change = true;
-                                        handled = true;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[powerpaste] failed to insert image: {e}");
-                                    }
-                                }
-                            } else {
-                                // Image too large, skip but update hash to avoid retrying
-                                last_image_hash = Some(hash);
+                    if last_text_hash != Some(current_hash) {
+                        let (source_app_name, source_app_bundle_id) = cached_source_app
+                            .clone()
+                            .unwrap_or_else(|| (None, None));
+
+                        match db::insert_text_with_source_app(
+                            &app,
+                            &text,
+                            Some("file".to_string()),
+                            source_app_name,
+                            source_app_bundle_id,
+                        ) {
+                            Ok(Some(item)) => {
+                                last_text_hash = Some(current_hash);
                                 processed_this_change = true;
                                 did_change = true;
-                                handled = true;
-                                eprintln!("[powerpaste] skipped large image: {} bytes", size_bytes);
+                                let _ = app.emit("powerpaste://new_item", item);
+                            }
+                            Ok(None) => {
+                                last_text_hash = Some(current_hash);
+                                processed_this_change = true;
+                                did_change = true;
+                            }
+                            Err(e) => {
+                                eprintln!("[powerpaste] failed to insert file paths: {e}");
                             }
                         }
-                        if handled {
-                            sleep_ms = 250;
-                        }
                     }
+                    sleep_ms = 250;
                 }
 
-                // Check for file URLs on clipboard (e.g., from Finder)
                 if !handled {
-                    if let Some(file_paths) = crate::platform::get_clipboard_file_urls() {
-                        // Join paths with newline for storage
-                        let text = file_paths.join("\n");
-                        let current_hash = text_hash(&text);
-                        
-                        if last_text_hash != Some(current_hash) {
-                            // Use cached source app info from when clipboard changed
-                            let (source_app_name, source_app_bundle_id) = cached_source_app
-                                .clone()
-                                .unwrap_or_else(|| (None, None));
-                            
-                            // Store as file content type
-                            match db::insert_text_with_source_app(&app, &text, Some("file".to_string()), source_app_name, source_app_bundle_id) {
-                                Ok(Some(item)) => {
-                                    last_text_hash = Some(current_hash);
+                    if let Some(ref mut cb) = clipboard.as_mut().ok() {
+                        if let Ok(image) = cb.get_image() {
+                            let image_bytes = image.bytes.as_ref();
+                            let hash = image_hash(image_bytes);
+
+                            // Skip if same as last image (fallback for non-macOS or same content)
+                            if last_image_hash != Some(hash) {
+                                let size_bytes = image_bytes.len() as u64;
+
+                                // Only store if within size limit
+                                if size_bytes <= MAX_IMAGE_SIZE_BYTES {
+                                    // Use cached source app info from when clipboard changed
+                                    let (source_app_name, source_app_bundle_id) = cached_source_app
+                                        .clone()
+                                        .unwrap_or_else(|| (None, None));
+                                    eprintln!("[powerpaste] inserting image from {:?}", source_app_name);
+                                    let encoded_image = crate::platform::get_clipboard_image_encoded();
+
+                                    match db::insert_image_with_source_app(
+                                        &app,
+                                        image_bytes,
+                                        image.width as u32,
+                                        image.height as u32,
+                                        source_app_name,
+                                        source_app_bundle_id,
+                                        encoded_image,
+                                    ) {
+                                        Ok(Some(item)) => {
+                                            last_image_hash = Some(hash);
+                                            processed_this_change = true;
+                                            did_change = true;
+                                            handled = true;
+                                            let _ = app.emit("powerpaste://new_item", item);
+                                        }
+                                        Ok(None) => {
+                                            last_image_hash = Some(hash);
+                                            processed_this_change = true;
+                                            did_change = true;
+                                            handled = true;
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[powerpaste] failed to insert image: {e}");
+                                        }
+                                    }
+                                } else {
+                                    // Image too large, skip but update hash to avoid retrying
+                                    last_image_hash = Some(hash);
                                     processed_this_change = true;
                                     did_change = true;
                                     handled = true;
-                                    let _ = app.emit("powerpaste://new_item", item);
-                                }
-                                Ok(None) => {
-                                    last_text_hash = Some(current_hash);
-                                    processed_this_change = true;
-                                    did_change = true;
-                                    handled = true;
-                                }
-                                Err(e) => {
-                                    eprintln!("[powerpaste] failed to insert file paths: {e}");
+                                    eprintln!("[powerpaste] skipped large image: {} bytes", size_bytes);
                                 }
                             }
-                        } else {
-                            handled = true;
+                            if handled {
+                                sleep_ms = 250;
+                            }
                         }
-                    } else {
-                        // No file URLs on the clipboard; fall through to text handling.
-                        // Guard against regressions where we accidentally short-circuit text inserts.
-                        debug_assert!(!handled, "no file URLs should not short-circuit text handling");
-                        handled = false;
-                    }
-                    if handled {
-                        sleep_ms = 250;
                     }
                 }
 
@@ -230,16 +206,14 @@ impl ClipboardWatcher {
                     };
 
                     // Use hash comparison to avoid issues with minor formatting differences
-                    let current_hash = text_hash(&text);
+                    let content_type = detect_content_type(&text);
+                    let current_hash = text_hash(&text, content_type.as_deref());
                     if last_text_hash == Some(current_hash) {
                         sleep_ms = (sleep_ms + 100).min(1000);
                         std::thread::sleep(Duration::from_millis(sleep_ms));
                         continue;
                     }
 
-                    // Detect content type for the text
-                    let content_type = detect_content_type(&text);
-                
                     // Use cached source app info from when clipboard changed
                     let (source_app_name, source_app_bundle_id) = cached_source_app
                         .clone()
@@ -298,4 +272,40 @@ pub fn set_clipboard_image_encoded(bytes: &[u8], mime: Option<&str>) -> Result<(
 /// Write file paths to the clipboard
 pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     crate::platform::set_clipboard_files(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_content_type, text_hash};
+
+    #[test]
+    fn copied_path_text_is_not_a_file() {
+        let image_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("icons/icon.png")
+            .canonicalize()
+            .unwrap();
+        let image_path = image_path.to_str().unwrap();
+
+        for text in [
+            image_path.to_string(),
+            format!("  {image_path}\n"),
+            format!("file://{image_path}"),
+            r"C:\Photos\photo.jpg".to_string(),
+            "C:/Photos/photo.jpg".to_string(),
+            "ordinary text".to_string(),
+        ] {
+            assert_eq!(detect_content_type(&text), None, "{text}");
+            assert_ne!(text_hash(&text, None), text_hash(&text, Some("file")));
+        }
+
+        assert_eq!(
+            text_hash(image_path, None),
+            text_hash(&format!("  {image_path}\n"), None)
+        );
+        assert_eq!(
+            detect_content_type("https://example.com/photo.jpg"),
+            Some("url".to_string())
+        );
+        assert_eq!(detect_content_type("https://example.com/ some text"), None);
+    }
 }
